@@ -24,21 +24,11 @@ ThemeData televisionTheme(ThemeData theme) {
     minimumSize: const WidgetStatePropertyAll(Size(52, 48)),
     textStyle: const WidgetStatePropertyAll(TextStyle(fontSize: 17)),
   );
-  // 10-foot 视距下默认焦点 overlay 几乎不可辨，改用实底高亮
-  final tileFocusColor = colors.primaryContainer.withValues(alpha: .55);
-  final tileOverlay = WidgetStateProperty.resolveWith<Color?>(
-    (states) => states.contains(WidgetState.focused) ? tileFocusColor : null,
-  );
-  final tileTheme = ListTileThemeData(
-    overlayColor: tileOverlay,
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-    iconColor: colors.onSurface,
-  );
+  // 10-foot 视距下默认焦点 overlay 几乎不可辨：
+  // Flutter 3.47 的 ListTileThemeData 已无 focusColor/hoverColor/overlayColor，
+  // 焦点高亮统一由下方 ThemeData.focusColor 全局兜底
   return theme.copyWith(
     focusColor: colors.primaryContainer,
-    listTileTheme: theme.listTileTheme.copyWith(
-      overlayColor: tileOverlay,
-    ),
     radioTheme: RadioThemeData(fillColor: WidgetStateProperty.resolveWith(
       (states) => states.contains(WidgetState.focused)
           ? colors.primary
