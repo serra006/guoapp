@@ -301,7 +301,9 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 	if response.Request != nil && response.Request.URL != nil {
 		finalURL = response.Request.URL
 	}
-	playlist := strings.Contains(asset.contentType, "mpegurl") || strings.Contains(contentType, "mpegurl") || strings.HasSuffix(strings.ToLower(finalURL.Path), ".m3u8") || strings.Contains(strings.ToLower(finalURL.String()), "m3u8") || len(session.key) > 0
+	// 注意：不能因 session.key 非空就把所有请求当播放列表——红果等站源取流总带解密 key，
+	// 否则 segment/mp4 响应会被误判为 playlist 并返回 502，播放永远无法开始。
+	playlist := strings.Contains(asset.contentType, "mpegurl") || strings.Contains(contentType, "mpegurl") || strings.HasSuffix(strings.ToLower(finalURL.Path), ".m3u8") || strings.Contains(strings.ToLower(finalURL.String()), "m3u8")
 	reader := bufio.NewReader(response.Body)
 	if !playlist && request.Method == http.MethodGet {
 		peek, _ := reader.Peek(512)
@@ -313,6 +315,16 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 		writer.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		writer.WriteHeader(http.StatusOK)
 		return
+	}
+	if playlist && request.Method == http.MethodGet {
+		// 上游可能把 m3u8 请求重定向到 mp4 直链（如红果 CDN 返回 video/mp4），
+		// 此时响应不是播放列表，回退为普通媒体透传，避免被 4MB 读取上限误判为 502。
+		peek, _ := reader.Peek(16)
+		list := bytes.HasPrefix(bytes.TrimSpace(bytes.TrimPrefix(peek, []byte("\ufeff"))), []byte("#EXTM3U"))
+		upstreamType := strings.ToLower(response.Header.Get("Content-Type"))
+		if !list && (strings.Contains(upstreamType, "video/") || strings.Contains(upstreamType, "audio/")) {
+			playlist = false
+		}
 	}
 	if playlist && request.Method == http.MethodGet {
 		body, err := io.ReadAll(io.LimitReader(reader, 4<<20+1))
