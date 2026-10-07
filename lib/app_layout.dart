@@ -26,15 +26,18 @@ ThemeData televisionTheme(ThemeData theme) {
   );
   // 10-foot 视距下默认焦点 overlay 几乎不可辨，改用实底高亮
   final tileFocusColor = colors.primaryContainer.withValues(alpha: .55);
+  final tileOverlay = WidgetStateProperty.resolveWith<Color?>(
+    (states) => states.contains(WidgetState.focused) ? tileFocusColor : null,
+  );
   final tileTheme = ListTileThemeData(
-    hoverColor: tileFocusColor,
+    overlayColor: tileOverlay,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     iconColor: colors.onSurface,
   );
   return theme.copyWith(
     focusColor: colors.primaryContainer,
     listTileTheme: theme.listTileTheme.copyWith(
-      hoverColor: tileFocusColor,
+      overlayColor: tileOverlay,
     ),
     radioTheme: RadioThemeData(fillColor: WidgetStateProperty.resolveWith(
       (states) => states.contains(WidgetState.focused)
