@@ -27,7 +27,6 @@ ThemeData televisionTheme(ThemeData theme) {
   // 10-foot 视距下默认焦点 overlay 几乎不可辨，改用实底高亮
   final tileFocusColor = colors.primaryContainer.withValues(alpha: .55);
   final tileTheme = ListTileThemeData(
-    focusColor: tileFocusColor,
     hoverColor: tileFocusColor,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     iconColor: colors.onSurface,
@@ -35,7 +34,6 @@ ThemeData televisionTheme(ThemeData theme) {
   return theme.copyWith(
     focusColor: colors.primaryContainer,
     listTileTheme: theme.listTileTheme.copyWith(
-      focusColor: tileFocusColor,
       hoverColor: tileFocusColor,
     ),
     radioTheme: RadioThemeData(fillColor: WidgetStateProperty.resolveWith(
@@ -43,7 +41,9 @@ ThemeData televisionTheme(ThemeData theme) {
           ? colors.primary
           : null,
     )),
-    checkboxTheme: CheckboxThemeData(side: focusSide),
+    checkboxTheme: CheckboxThemeData(
+      side: BorderSide(color: colors.primary, width: 2),
+    ),
     switchTheme: SwitchThemeData(
       thumbColor: WidgetStateProperty.resolveWith(
         (states) => states.contains(WidgetState.focused)
@@ -57,8 +57,8 @@ ThemeData televisionTheme(ThemeData theme) {
       ),
     ),
     chipTheme: theme.chipTheme.copyWith(
-      labelStyle: theme.chipTheme.labelStyle.copyWith(fontSize: 17),
-      side: focusSide,
+      labelStyle: theme.chipTheme.labelStyle?.copyWith(fontSize: 17),
+      side: BorderSide(color: colors.primary, width: 2),
     ),
     popupMenuTheme: theme.popupMenuTheme.copyWith(
       color: colors.surface,
