@@ -23,8 +23,8 @@ output.mkdir(parents=True, exist_ok=True)
 artifacts = []
 
 if options.platform == 'android':
-    # 指定 --flavor 后，产物文件名携带 flavor 中缀（如 app-arm64-v8a-tv-release.apk）
-    flavor_infix = '' if variant.flavor == 'phone' else '-' + variant.flavor
+    # --flavor 始终指定，产物文件名一律携带 flavor 中缀（如 app-arm64-v8a-tv-release.apk）
+    flavor_infix = '-' + variant.flavor
     for abi in options.abi or ['arm64-v8a', 'armeabi-v7a', 'x86_64']:
         source = root / 'build' / 'app' / 'outputs' / 'flutter-apk' / f'app-{abi}{flavor_infix}-release.apk'
         if not source.is_file():
