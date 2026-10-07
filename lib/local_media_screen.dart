@@ -4,11 +4,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'app_layout.dart';
 import 'core_bridge.dart';
 import 'local_store.dart';
 import 'media_library.dart';
 import 'models.dart';
 import 'player_screen.dart';
+import 'remote_widgets.dart';
 import 'settings_screen.dart';
 import 'merge_queue_screen.dart';
 
@@ -294,83 +296,88 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
                   ? Center(
                       child: Text(_merged ? '合并成品会显示在这里，可直接播放和续播。' : '暂未导出媒体'),
                     )
-                  : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
-                      itemCount: items.length,
-                      itemBuilder: (context, index) {
-                        final item = items[index];
-                        return Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  item.drama.title,
-                                  style: Theme.of(
-                                    context,
-                                  ).textTheme.titleMedium,
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  '${item.merged
-                                      ? '已合并 ${item.episodes.length} 集'
-                                      : item.special
-                                      ? '特别篇 ${item.specialNumber} · 第 ${item.episodes.first}–${item.episodes.last} 集'
-                                      : '第 ${item.episodes.first} 集'} · ${storageSize(item.bytes)}',
-                                ),
-                                if (item.merged)
+                  : TelevisionFocusScroller(
+                      child: ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+                        itemCount: items.length,
+                        itemBuilder: (context, index) {
+                          final item = items[index];
+                          return Card(
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
                                   Text(
-                                    '视频转码 ${item.videoTranscodes} 集 · 音轨处理 ${item.audioTranscodes} 集',
+                                    item.drama.title,
                                     style: Theme.of(
                                       context,
-                                    ).textTheme.bodySmall,
+                                    ).textTheme.titleMedium,
                                   ),
-                                if (item.merged)
-                                  TextButton.icon(
-                                    onPressed: library.busy
-                                        ? null
-                                        : () => _exportMerged(item),
-                                    icon: const Icon(Icons.output_rounded),
-                                    label: const Text('导出到 Emby 特别篇'),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    '${item.merged
+                                        ? '已合并 ${item.episodes.length} 集'
+                                        : item.special
+                                        ? '特别篇 ${item.specialNumber} · 第 ${item.episodes.first}–${item.episodes.last} 集'
+                                        : '第 ${item.episodes.first} 集'} · ${storageSize(item.bytes)}',
                                   ),
-                                Row(
-                                  children: [
+                                  if (item.merged)
+                                    Text(
+                                      '视频转码 ${item.videoTranscodes} 集 · 音轨处理 ${item.audioTranscodes} 集',
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                    ),
+                                  if (item.merged)
                                     TextButton.icon(
-                                      onPressed: () => _play(item),
-                                      icon: const Icon(Icons.play_arrow),
-                                      label: Text(
-                                        item.merged &&
-                                                item.episodes.length ==
-                                                    item.drama.episodes
-                                            ? '全集播放'
-                                            : '本地播放',
-                                      ),
-                                    ),
-                                    const Spacer(),
-                                    IconButton(
-                                      tooltip: '复制文件路径',
-                                      onPressed: () => Clipboard.setData(
-                                        ClipboardData(
-                                          text: library.fileFor(item),
-                                        ),
-                                      ),
-                                      icon: const Icon(Icons.copy),
-                                    ),
-                                    IconButton(
-                                      tooltip: '删除成品',
                                       onPressed: library.busy
                                           ? null
-                                          : () => _remove(item),
-                                      icon: const Icon(Icons.delete_outline),
+                                          : () => _exportMerged(item),
+                                      icon: const Icon(Icons.output_rounded),
+                                      label: const Text('导出到 Emby 特别篇'),
                                     ),
-                                  ],
-                                ),
-                              ],
+                                  Row(
+                                    children: [
+                                      TextButton.icon(
+                                        autofocus:
+                                            index == 0 &&
+                                            AppLayout.isTelevision(context),
+                                        onPressed: () => _play(item),
+                                        icon: const Icon(Icons.play_arrow),
+                                        label: Text(
+                                          item.merged &&
+                                                  item.episodes.length ==
+                                                      item.drama.episodes
+                                              ? '全集播放'
+                                              : '本地播放',
+                                        ),
+                                      ),
+                                      const Spacer(),
+                                      IconButton(
+                                        tooltip: '复制文件路径',
+                                        onPressed: () => Clipboard.setData(
+                                          ClipboardData(
+                                            text: library.fileFor(item),
+                                          ),
+                                        ),
+                                        icon: const Icon(Icons.copy),
+                                      ),
+                                      IconButton(
+                                        tooltip: '删除成品',
+                                        onPressed: library.busy
+                                            ? null
+                                            : () => _remove(item),
+                                        icon: const Icon(Icons.delete_outline),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                        );
-                      },
+                          );
+                        },
+                      ),
                     ),
             ),
           ],

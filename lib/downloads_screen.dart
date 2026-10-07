@@ -13,6 +13,7 @@ import 'models.dart';
 import 'player_screen.dart';
 import 'settings_screen.dart';
 import 'widgets.dart';
+import 'remote_widgets.dart';
 
 class DownloadsScreen extends StatefulWidget {
   const DownloadsScreen({
@@ -422,13 +423,14 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     ),
   ];
 
-  Widget _collection(DownloadCollection collection) {
+  Widget _collection(DownloadCollection collection, {bool autofocus = false}) {
     final count = collection.jobs
         .where((job) => _selected.contains(job.id))
         .length;
     final expanded = _expanded.contains(collection.drama.id);
     return Card(
-      child: ListTile(
+      child: TvTile(
+        autofocus: autofocus,
         leading: _selecting
             ? Checkbox(
                 tristate: true,
@@ -493,7 +495,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ListTile(
+          TvTile(
             leading: _selecting
                 ? Checkbox(
                     value: _selected.contains(job.id),
@@ -647,21 +649,27 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
           ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: TextField(
-            controller: _search,
-            onChanged: (_) => setState(() {}),
-            decoration: InputDecoration(
-              hintText: '搜索剧名、站源或分类',
-              prefixIcon: const Icon(Icons.search_rounded),
-              suffixIcon: _search.text.isEmpty
-                  ? null
-                  : IconButton(
-                      tooltip: '清空搜索',
-                      onPressed: () => setState(_search.clear),
-                      icon: const Icon(Icons.close_rounded),
-                    ),
-            ),
-          ),
+          child: AppLayout.isTelevision(context)
+              ? TelevisionSearchBar(
+                  value: _search.text,
+                  hint: '搜索剧名、站源或分类',
+                  onSubmit: (value) => setState(() => _search.text = value),
+                )
+              : TextField(
+                  controller: _search,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    hintText: '搜索剧名、站源或分类',
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    suffixIcon: _search.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: '清空搜索',
+                            onPressed: () => setState(_search.clear),
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                  ),
+                ),
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
@@ -709,14 +717,20 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                   message: '在剧集详情选择下载，或调整筛选查看已保留的视频。',
                   icon: Icons.download_outlined,
                 )
-              : ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
-                  itemCount: rows.length,
-                  itemBuilder: (_, index) => switch (rows[index]) {
-                    DownloadCollection collection => _collection(collection),
-                    DownloadJob job => _episode(job),
-                    _ => const SizedBox.shrink(),
-                  },
+              : TelevisionFocusScroller(
+                  child: ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
+                    itemCount: rows.length,
+                    itemBuilder: (_, index) => switch (rows[index]) {
+                      DownloadCollection collection => _collection(
+                        collection,
+                        autofocus:
+                            index == 0 && AppLayout.isTelevision(context),
+                      ),
+                      DownloadJob job => _episode(job),
+                      _ => const SizedBox.shrink(),
+                    },
+                  ),
                 ),
         ),
         if (_selecting) _batchBar(),

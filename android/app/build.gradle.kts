@@ -40,6 +40,22 @@ android {
         manifestPlaceholders["appBanner"] = if (allSources) "@drawable/tv_banner_all_sources" else "@drawable/tv_banner"
     }
 
+    flavorDimensions += "platform"
+    productFlavors {
+        // 手机/平板：与历史版本保持一致（同包名覆盖升级）
+        create("phone") {
+            dimension = "platform"
+        }
+        // 电视/盒子：独立包名，可与手机版并存；仅电视桌面(LEANBACK)可见
+        create("tv") {
+            dimension = "platform"
+            applicationId = "com.duanju.duanju_app.tv"
+            versionNameSuffix = "-tv"
+            manifestPlaceholders["appLabel"] = if (allSources) "真果鉴 TV" else "红果鉴 TV"
+            manifestPlaceholders["appBanner"] = if (allSources) "@drawable/tv_banner_all_sources" else "@drawable/tv_banner"
+        }
+    }
+
     signingConfigs {
         if (releaseKey.exists()) {
             create("release") {

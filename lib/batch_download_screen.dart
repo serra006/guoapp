@@ -2,11 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'app_layout.dart';
 import 'batch_downloads.dart';
 import 'core_bridge.dart';
 import 'downloads_screen.dart';
 import 'local_store.dart';
 import 'models.dart';
+import 'remote_widgets.dart';
 import 'widgets.dart';
 
 class BatchDownloadScreen extends StatefulWidget {
@@ -84,92 +86,96 @@ class _BatchDownloadScreenState extends State<BatchDownloadScreen> {
                       if (_batch.busy)
                         const LinearProgressIndicator(minHeight: 2),
                       Expanded(
-                        child: ListView(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-                          children: [
-                            Text(
-                              '${_batch.items.length} 部短剧',
-                              style: Theme.of(context).textTheme.titleLarge,
-                            ),
-                            const SizedBox(height: 8),
-                            const Text('先读取分集，再加入下载。默认选择非 VIP 集，已有任务自动跳过。'),
-                            const SizedBox(height: 12),
-                            DropdownButtonFormField<int>(
-                              key: const ValueKey('batch-download-quality'),
-                              initialValue: _batch.quality,
-                              isExpanded: true,
-                              decoration: const InputDecoration(
-                                labelText: '下载画质',
+                        child: TelevisionFocusScroller(
+                          child: ListView(
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                            children: [
+                              Text(
+                                '${_batch.items.length} 部短剧',
+                                style: Theme.of(context).textTheme.titleLarge,
                               ),
-                              onChanged: _batch.busy || _batch.settingsLocked
-                                  ? null
-                                  : (value) => _batch.setQuality(value ?? 0),
-                              items: [
-                                const DropdownMenuItem(
-                                  value: 0,
-                                  child: Text('自动 · 优先高清'),
+                              const SizedBox(height: 8),
+                              const Text('先读取分集，再加入下载。默认选择非 VIP 集，已有任务自动跳过。'),
+                              const SizedBox(height: 12),
+                              DropdownButtonFormField<int>(
+                                key: const ValueKey('batch-download-quality'),
+                                initialValue: _batch.quality,
+                                isExpanded: true,
+                                decoration: const InputDecoration(
+                                  labelText: '下载画质',
                                 ),
-                                for (final quality in [1080, 720, 480])
-                                  DropdownMenuItem(
-                                    value: quality,
-                                    child: Text('${quality}P'),
+                                onChanged: _batch.busy || _batch.settingsLocked
+                                    ? null
+                                    : (value) => _batch.setQuality(value ?? 0),
+                                items: [
+                                  const DropdownMenuItem(
+                                    value: 0,
+                                    child: Text('自动 · 优先高清'),
                                   ),
-                              ],
-                            ),
-                            CheckboxListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text('包含 VIP 分集'),
-                              subtitle: const Text('VIP 集可能只能下载试看内容'),
-                              value: _batch.includeVip,
-                              onChanged: _batch.busy || _batch.settingsLocked
-                                  ? null
-                                  : (value) =>
-                                        _batch.setIncludeVip(value ?? false),
-                            ),
-                            if (_batch.warning.isNotEmpty)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: Text(
-                                  _batch.warning,
-                                  style: TextStyle(
-                                    color: Theme.of(context).colorScheme.error,
-                                  ),
-                                ),
+                                  for (final quality in [1080, 720, 480])
+                                    DropdownMenuItem(
+                                      value: quality,
+                                      child: Text('${quality}P'),
+                                    ),
+                                ],
                               ),
-                            if (_batch.current != null)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: Text(
-                                  '${_batch.submitting ? '正在添加' : '正在读取'}：${_batch.current!.drama.title}',
-                                ),
+                              TvCheckboxTile(
+                                autofocus: AppLayout.isTelevision(context),
+                                title: const Text('包含 VIP 分集'),
+                                subtitle: const Text('VIP 集可能只能下载试看内容'),
+                                value: _batch.includeVip,
+                                onChanged: _batch.busy || _batch.settingsLocked
+                                    ? null
+                                    : (value) =>
+                                          _batch.setIncludeVip(value),
                               ),
-                            for (final item in _batch.items)
-                              Card(
-                                child: CheckboxListTile(
-                                  key: ValueKey('batch-drama-${item.drama.id}'),
-                                  value: item.selected,
-                                  onChanged:
-                                      _batch.busy || _batch.settingsLocked
-                                      ? null
-                                      : (value) =>
-                                            _batch.select(item, value ?? false),
-                                  title: Text(
-                                    item.detail?.drama.title ??
-                                        item.drama.title,
+                              if (_batch.warning.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 12),
+                                  child: Text(
+                                    _batch.warning,
+                                    style: TextStyle(
+                                      color: Theme.of(context).colorScheme.error,
+                                    ),
                                   ),
-                                  subtitle: Text(
-                                    _subtitle(item),
-                                    style: item.error == null
+                                ),
+                              if (_batch.current != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 12),
+                                  child: Text(
+                                    '${_batch.submitting ? '正在添加' : '正在读取'}：${_batch.current!.drama.title}',
+                                  ),
+                                ),
+                              for (final item in _batch.items)
+                                Card(
+                                  child: TvCheckboxTile(
+                                    key: ValueKey(
+                                      'batch-drama-${item.drama.id}',
+                                    ),
+                                    value: item.selected,
+                                    onChanged:
+                                        _batch.busy || _batch.settingsLocked
                                         ? null
-                                        : TextStyle(
-                                            color: Theme.of(
-                                              context,
-                                            ).colorScheme.error,
-                                          ),
+                                        : (value) =>
+                                              _batch.select(item, value),
+                                    title: Text(
+                                      item.detail?.drama.title ??
+                                          item.drama.title,
+                                    ),
+                                    subtitle: Text(
+                                      _subtitle(item),
+                                      style: item.error == null
+                                          ? null
+                                          : TextStyle(
+                                              color: Theme.of(
+                                                context,
+                                              ).colorScheme.error,
+                                            ),
+                                    ),
                                   ),
                                 ),
-                              ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                       Padding(

@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- 电视版：仅保留电视桌面(LEANBACK)入口，替换主清单的 MAIN intent-filter -->
+    <application android:label="${appLabel}">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter tools:node="replace">
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

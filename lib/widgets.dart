@@ -461,6 +461,10 @@ class DramaTile extends StatelessWidget {
       ],
     );
     if (television) {
+      // 触屏长按（onLongPress 多选）在遥控器上不可达，TV 替代路径：
+      // 1. 遥控器菜单键(contextMenu) → onMore 菜单，内含"多选下载"入口
+      // 2. 标题栏「多选下载」按钮(select-catalog-dramas) → 进入选择模式后卡片点按即选择
+      // 3. 详情页含收藏/状态/下载全部功能，作为最终兜底
       return CallbackShortcuts(
         bindings: {
           const SingleActivator(LogicalKeyboardKey.contextMenu): ?onMore,

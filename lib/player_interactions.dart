@@ -29,16 +29,20 @@ class PlayerInteractions extends ChangeNotifier {
     required this.onFullscreen,
     required this.onEpisode,
     this.onSeek,
-  }) {
+    bool television = false,
+  }) : _television = television {
     _playing = player.stream.playing.listen((playing) {
       if (!playing) cancel();
     });
-    AppDevice.getBrightness().then((val) {
-      if (!_disposed) {
-        _brightness = val;
-        notifyListeners();
-      }
-    }).catchError((_) {});
+    // 电视端亮度由系统/遥控器管理，禁止应用读写
+    if (!television) {
+      AppDevice.getBrightness().then((val) {
+        if (!_disposed) {
+          _brightness = val;
+          notifyListeners();
+        }
+      }).catchError((_) {});
+    }
   }
 
   final Player player;
@@ -48,6 +52,10 @@ class PlayerInteractions extends ChangeNotifier {
   final VoidCallback onFullscreen;
   final String Function(int direction) onEpisode;
   final Future<void> Function(Duration)? onSeek;
+  bool _television;
+  // 电视端亮度由系统/遥控器管理，禁止应用读写；由播放页在 didChangeDependencies 同步
+  bool get television => _television;
+  set television(bool value) => _television = value;
   late final StreamSubscription<bool> _playing;
   Timer? _holdTimer;
   Timer? _hintTimer;
@@ -81,7 +89,7 @@ class PlayerInteractions extends ChangeNotifier {
   bool get isBrightnessActive => _hudState.type == SwipeAction.brightness;
 
   void setBrightnessDirect(double value) {
-    if (_disposed) return;
+    if (_disposed || television) return;
     _brightness = value.clamp(0.01, 1.0);
     AppDevice.setBrightness(_brightness);
     _showHud(SwipeAction.brightness, _brightness);
@@ -366,7 +374,9 @@ class PlayerInteractions extends ChangeNotifier {
     _holdTimer?.cancel();
     _hintTimer?.cancel();
     _hudTimer?.cancel();
-    AppDevice.resetBrightness(); // 离开播放器时自动恢复手机/平板系统默认亮度
+    if (!television) {
+      AppDevice.resetBrightness(); // 离开播放器时自动恢复手机/平板系统默认亮度
+    }
     if (_boosting) unawaited(_setRate(baseSpeed()));
     _boosting = false;
     _playing.cancel();

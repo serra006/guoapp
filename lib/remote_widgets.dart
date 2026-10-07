@@ -753,3 +753,420 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
     );
   }
 }
+
+/// 电视端焦点滚动容器：包在 ListView/GridView 外层，
+/// 页内任何可聚焦子项获得焦点时自动滚动至可见（D-pad 不会触发指针滚动）。
+class TelevisionFocusScroller extends StatefulWidget {
+  const TelevisionFocusScroller({
+    super.key,
+    required this.child,
+    this.alignment = 0.25,
+  });
+
+  final Widget child;
+  final double alignment;
+
+  @override
+  State<TelevisionFocusScroller> createState() =>
+      _TelevisionFocusScrollerState();
+}
+
+class _TelevisionFocusScrollerState extends State<TelevisionFocusScroller> {
+  late final FocusManager _manager = FocusManager.instance;
+  VoidCallback? _listener;
+
+  @override
+  void initState() {
+    super.initState();
+    _listener = _onFocusChanged;
+    _manager.addListener(_listener!);
+  }
+
+  void _onFocusChanged() {
+    final focusContext = _manager.primaryFocus?.context;
+    if (focusContext == null || !mounted) return;
+    try {
+      final owner = focusContext.findAncestorStateOfType<
+        _TelevisionFocusScrollerState
+      >();
+      if (owner != this) return;
+    } catch (_) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final target = _manager.primaryFocus?.context;
+      if (target == null) return;
+      Scrollable.ensureVisible(
+        target,
+        alignment: widget.alignment,
+        duration: const Duration(milliseconds: 120),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    if (_listener != null) _manager.removeListener(_listener!);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+/// 电视端列表项：RemoteTarget 焦点壳 + 原版 ListTile 视觉，
+/// 整行可聚焦、OK 键激活，替代裸 ListTile（后者无 TV 焦点反馈）。
+class TvTile extends StatelessWidget {
+  const TvTile({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.leading,
+    this.trailing,
+    this.onTap,
+    this.autofocus = false,
+    this.enabled = true,
+  });
+
+  final Widget title;
+  final Widget? subtitle;
+  final Widget? leading;
+  final Widget? trailing;
+  final VoidCallback? onTap;
+  final bool autofocus;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) => RemoteTarget(
+    onPressed: enabled ? onTap : null,
+    autofocus: autofocus,
+    child: ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: leading,
+      title: title,
+      subtitle: subtitle,
+      // 激活与焦点均由 RemoteTarget 接管，ListTile 本身不响应点击
+      onTap: null,
+      trailing: trailing,
+      enabled: enabled,
+    ),
+  );
+}
+
+/// 电视端开关列表项：整行聚焦，OK 键切换开关。
+class TvSwitchTile extends StatelessWidget {
+  const TvSwitchTile({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    required this.title,
+    this.subtitle,
+    this.autofocus = false,
+  });
+
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+  final Widget title;
+  final Widget? subtitle;
+  final bool autofocus;
+
+  @override
+  Widget build(BuildContext context) => RemoteTarget(
+    onPressed: onChanged == null ? null : () => onChanged!(!value),
+    autofocus: autofocus,
+    child: SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      value: value,
+      // 交互由 RemoteTarget 接管，开关仅作状态展示
+      onChanged: null,
+      title: title,
+      subtitle: subtitle,
+    ),
+  );
+}
+
+/// 电视端复选列表项：整行聚焦，OK 键切换勾选。
+class TvCheckboxTile extends StatelessWidget {
+  const TvCheckboxTile({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    required this.title,
+    this.subtitle,
+    this.autofocus = false,
+  });
+
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+  final Widget title;
+  final Widget? subtitle;
+  final bool autofocus;
+
+  @override
+  Widget build(BuildContext context) => RemoteTarget(
+    onPressed: onChanged == null ? null : () => onChanged!(!value),
+    autofocus: autofocus,
+    child: CheckboxListTile(
+      contentPadding: EdgeInsets.zero,
+      value: value,
+      // 交互由 RemoteTarget 接管，复选框仅作状态展示
+      onChanged: null,
+      title: title,
+      subtitle: subtitle,
+    ),
+  );
+}
+
+/// 电视端通用文本/数字输入对话框：自建虚拟键盘，彻底杜绝系统软键盘。
+/// 返回输入内容（取消返回 null）。
+Future<String?> showTelevisionTextInput(
+  BuildContext context, {
+  required String title,
+  String initialValue = '',
+  bool numericOnly = false,
+  bool obscureText = false,
+  int? maxLength,
+  String? hint,
+}) => showDialog<String>(
+  context: context,
+  builder: (_) => TelevisionTextInputDialog(
+    title: title,
+    initialValue: initialValue,
+    numericOnly: numericOnly,
+    obscureText: obscureText,
+    maxLength: maxLength,
+    hint: hint,
+  ),
+);
+
+class TelevisionTextInputDialog extends StatefulWidget {
+  const TelevisionTextInputDialog({
+    super.key,
+    required this.title,
+    this.initialValue = '',
+    this.numericOnly = false,
+    this.obscureText = false,
+    this.maxLength,
+    this.hint,
+  });
+
+  final String title;
+  final String initialValue;
+  final bool numericOnly;
+  final bool obscureText;
+  final int? maxLength;
+  final String? hint;
+
+  @override
+  State<TelevisionTextInputDialog> createState() =>
+      _TelevisionTextInputDialogState();
+}
+
+class _TelevisionTextInputDialogState extends State<TelevisionTextInputDialog> {
+  late String _value = widget.initialValue;
+
+  static const _textKeys = [
+    'A', 'B', 'C', 'D', 'E', 'F',
+    'G', 'H', 'I', 'J', 'K', 'L',
+    'M', 'N', 'O', 'P', 'Q', 'R',
+    'S', 'T', 'U', 'V', 'W', 'X',
+    'Y', 'Z', '1', '2', '3', '4',
+    '5', '6', '7', '8', '9', '0',
+  ];
+  static const _numberKeys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
+
+  bool get _canAppend => widget.maxLength == null ||
+      _value.length < widget.maxLength!;
+
+  void _append(String char) {
+    if (!_canAppend) return;
+    setState(() => _value += char);
+  }
+
+  void _backspace() {
+    if (_value.isNotEmpty) {
+      setState(() => _value = _value.substring(0, _value.length - 1));
+    }
+  }
+
+  void _clear() {
+    if (_value.isNotEmpty) setState(() => _value = '');
+  }
+
+  void _submit() => Navigator.pop(context, _value.trim());
+
+  String get _display => widget.obscureText ? '•' * _value.length : _value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final keys = widget.numericOnly ? _numberKeys : _textKeys;
+    return AlertDialog(
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      title: Row(
+        children: [
+          Icon(Icons.keyboard_alt_outlined, color: theme.colorScheme.primary),
+          const SizedBox(width: 10),
+          Expanded(child: Text(widget.title)),
+        ],
+      ),
+      content: SizedBox(
+        width: 560,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 只读显示条，焦点与激活全部由虚拟键盘承担
+            Container(
+              height: 56,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              alignment: Alignment.centerLeft,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest.withValues(
+                  alpha: .5,
+                ),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: theme.colorScheme.primary.withValues(alpha: .3),
+                ),
+              ),
+              child: Text(
+                _value.isEmpty
+                    ? (widget.hint ?? (widget.numericOnly ? '输入数字' : '输入内容'))
+                    : _display,
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: _value.isEmpty ? FontWeight.normal : FontWeight.bold,
+                  color: _value.isEmpty
+                      ? theme.hintColor
+                      : theme.colorScheme.onSurface,
+                  letterSpacing: _value.isEmpty ? 0 : 2,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                for (final (index, key) in keys.indexed)
+                  RemoteButton(
+                    key: ValueKey('tv-key-$key-$index'),
+                    label: key,
+                    autofocus: index == 0,
+                    onPressed: () => _append(key),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                RemoteButton(
+                  label: '退格',
+                  icon: Icons.backspace_outlined,
+                  onPressed: _backspace,
+                ),
+                RemoteButton(
+                  label: '清空',
+                  icon: Icons.clear_all_rounded,
+                  onPressed: _value.isEmpty ? null : _clear,
+                ),
+                RemoteButton(
+                  label: '确定',
+                  icon: Icons.check_rounded,
+                  onPressed: _submit,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        RemoteButton(
+          label: '取消',
+          onPressed: () => Navigator.pop(context),
+        ),
+      ],
+    );
+  }
+}
+
+/// 电视端只读搜索条：点击弹出虚拟键盘输入，杜绝系统软键盘。
+/// 再次打开后清空并确定即可清空搜索。
+class TelevisionSearchBar extends StatelessWidget {
+  const TelevisionSearchBar({
+    super.key,
+    required this.value,
+    required this.hint,
+    required this.onSubmit,
+    this.title,
+  });
+
+  final String value;
+  final String hint;
+  final ValueChanged<String> onSubmit;
+  final String? title;
+
+  Future<void> _openInput(BuildContext context) async {
+    final text = await showTelevisionTextInput(
+      context,
+      title: title ?? hint,
+      initialValue: value,
+      maxLength: 40,
+    );
+    if (text != null) onSubmit(text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return RemoteTarget(
+      onPressed: () => _openInput(context),
+      child: Container(
+        height: 56,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: .4),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: theme.colorScheme.primary.withValues(alpha: .3),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.search_rounded, color: theme.colorScheme.primary),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                value.isEmpty ? hint : value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 19,
+                  fontWeight: value.isEmpty
+                      ? FontWeight.normal
+                      : FontWeight.bold,
+                  color: value.isEmpty
+                      ? theme.hintColor
+                      : theme.colorScheme.onSurface,
+                ),
+              ),
+            ),
+            if (value.isNotEmpty)
+              Icon(
+                Icons.edit_note_rounded,
+                size: 22,
+                color: theme.hintColor,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}

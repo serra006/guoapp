@@ -24,8 +24,52 @@ ThemeData televisionTheme(ThemeData theme) {
     minimumSize: const WidgetStatePropertyAll(Size(52, 48)),
     textStyle: const WidgetStatePropertyAll(TextStyle(fontSize: 17)),
   );
+  // 10-foot 视距下默认焦点 overlay 几乎不可辨，改用实底高亮
+  final tileFocusColor = colors.primaryContainer.withValues(alpha: .55);
+  final tileTheme = ListTileThemeData(
+    focusColor: tileFocusColor,
+    hoverColor: tileFocusColor,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    iconColor: colors.onSurface,
+  );
   return theme.copyWith(
     focusColor: colors.primaryContainer,
+    listTileTheme: theme.listTileTheme.copyWith(
+      focusColor: tileFocusColor,
+      hoverColor: tileFocusColor,
+    ),
+    radioTheme: RadioThemeData(fillColor: WidgetStateProperty.resolveWith(
+      (states) => states.contains(WidgetState.focused)
+          ? colors.primary
+          : null,
+    )),
+    checkboxTheme: CheckboxThemeData(side: focusSide),
+    switchTheme: SwitchThemeData(
+      thumbColor: WidgetStateProperty.resolveWith(
+        (states) => states.contains(WidgetState.focused)
+            ? colors.primary
+            : null,
+      ),
+      trackOutlineColor: WidgetStateProperty.resolveWith(
+        (states) => states.contains(WidgetState.focused)
+            ? colors.primary
+            : null,
+      ),
+    ),
+    chipTheme: theme.chipTheme.copyWith(
+      labelStyle: theme.chipTheme.labelStyle.copyWith(fontSize: 17),
+      side: focusSide,
+    ),
+    popupMenuTheme: theme.popupMenuTheme.copyWith(
+      color: colors.surface,
+      elevation: 8,
+    ),
+    dialogTheme: theme.dialogTheme.copyWith(
+      titleTextStyle: (theme.dialogTheme.titleTextStyle ??
+              theme.textTheme.titleLarge)
+          ?.copyWith(fontSize: 26),
+      contentTextStyle: theme.textTheme.bodyLarge,
+    ),
     iconButtonTheme: IconButtonThemeData(
       style: button.copyWith(backgroundColor: focusBackground),
     ),
