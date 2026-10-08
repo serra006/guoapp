@@ -420,6 +420,29 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _confirmExit(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('退出应用'),
+        content: const Text('确定要退出吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              SystemNavigator.pop();
+            },
+            child: const Text('退出'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1153,11 +1176,16 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         if (!television && !_selectionMode) return scaffold;
         return PopScope(
-          canPop:
-              !_selectionMode &&
-              (!television || _tab == 0 && _search.text.isEmpty),
+          // 电视：返回键始终由本组件处理——先回退界面状态（取消选择/切回首页/清空
+          // 搜索），已在首页且无事可做时弹退出确认，避免误触直接退出应用。
+          canPop: !television && !_selectionMode,
           onPopInvokedWithResult: (didPop, result) {
-            if (!didPop) _televisionBack();
+            if (didPop) return;
+            if (_selectionMode || _tab != 0 || _search.text.isNotEmpty) {
+              _televisionBack();
+              return;
+            }
+            if (television) _confirmExit(context);
           },
           child: CallbackShortcuts(
             bindings: {

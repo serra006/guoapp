@@ -193,6 +193,42 @@ class _AppBootstrapState extends State<AppBootstrap>
   );
 }
 
+/// 根路由退出保护：遥控器返回到首页再按返回时，弹出确认对话框防止误退出。
+class _ExitGuard extends StatelessWidget {
+  const _ExitGuard({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: false,
+    onPopInvokedWithResult: (didPop, result) {
+      if (didPop) return;
+      showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('退出应用'),
+          content: const Text('确定要退出吗？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                SystemNavigator.pop();
+              },
+              child: const Text('退出'),
+            ),
+          ],
+        ),
+      );
+    },
+    child: child,
+  );
+}
+
 class DuanjuApp extends StatelessWidget {
   const DuanjuApp({
     super.key,
@@ -253,7 +289,8 @@ class DuanjuApp extends StatelessWidget {
                       LogicalKeyboardKey.gameButtonA,
                       includeRepeats: false,
                     ): ActivateIntent(),
-                    SingleActivator(LogicalKeyboardKey.goBack): DismissIntent(),
+                    // 注意：不要把 goBack 映射为 DismissIntent——
+                    // 它会拦截遥控器返回键，导致返回键不再走标准的路由返回逻辑。
                   },
                   child: FocusTraversalGroup(child: child!),
                 ),
@@ -265,7 +302,7 @@ class DuanjuApp extends StatelessWidget {
     },
     home: store != null
         ? store!.locked
-              ? ProfilesScreen(store: store!, locked: true)
+              ? _ExitGuard(child: ProfilesScreen(store: store!, locked: true))
               : HomeScreen(
                   key: ValueKey(
                     'profile-${store!.profile.id}-${store!.profileEpoch}',
