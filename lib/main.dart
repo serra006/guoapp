@@ -87,11 +87,14 @@ class _AppBootstrapState extends State<AppBootstrap>
 
   bool _handleBackKey(KeyEvent event) {
     if (event.logicalKey != LogicalKeyboardKey.goBack) return false;
-    if (event is KeyDownEvent && !event.repeat) {
+    if (event is KeyDownEvent) {
+      // 首次按下：统一触发一次路由返回
       _onBackRequested();
       return true;
     }
-    return true; // keyUp 与 repeat：吞掉
+    // KeyRepeatEvent（长按连发）与 KeyUpEvent：吞掉，
+    // 避免一次物理按键触发多次返回（连退多级页面 / 弹窗闪现）。
+    return true;
   }
 
   Future<void> _onBackRequested() async {
