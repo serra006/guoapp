@@ -234,6 +234,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        android.util.Log.i("BackTrace", "onKeyDown code=$keyCode tv=$televisionMode")
         if (televisionMode && keyCode == KeyEvent.KEYCODE_BACK) {
             if (event?.repeatCount == 0) {
                 backChannel?.invokeMethod("backRequested", null)
@@ -244,10 +245,20 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        android.util.Log.i("BackTrace", "onKeyUp code=$keyCode tv=$televisionMode")
         if (televisionMode && keyCode == KeyEvent.KEYCODE_BACK) {
             return true
         }
         return super.onKeyUp(keyCode, event)
+    }
+
+    override fun onBackPressed() {
+        android.util.Log.i("BackTrace", "onBackPressed tv=$televisionMode")
+        if (televisionMode) {
+            backChannel?.invokeMethod("backRequested", null)
+            return
+        }
+        super.onBackPressed()
     }
 
     private fun pictureInPictureSupported(): Boolean {

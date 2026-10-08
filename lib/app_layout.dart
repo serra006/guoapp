@@ -9,24 +9,45 @@ export 'app_build.dart';
 const appVersion = '0.2.64';
 
 DateTime? _lastExitIntentAt;
+ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _lastExitSnackBar;
 
 /// 电视上的退出确认：2 秒内第二次按返回才真正退出，否则显示提示（防误触）。
 /// 使用 SnackBar 而非对话框——对话框是路由，会被后续返回事件意外关闭。
+///
+/// 注意：返回键可能被框架层与原生通道层双重投递（TCL 等电视上同一次按键
+/// 会触发两次），因此 600ms 内的第二次调用视为同一次按键的重复投递，
+/// 直接忽略，否则会跳过提示直接退出。
 void requestExitConfirmation(BuildContext context) {
   final now = DateTime.now();
-  if (_lastExitIntentAt != null &&
-      now.difference(_lastExitIntentAt!) < const Duration(seconds: 2)) {
-    SystemNavigator.pop();
-    return;
+  final last = _lastExitIntentAt;
+  if (last != null) {
+    final delta = now.difference(last);
+    if (delta < const Duration(milliseconds: 600)) {
+      debugPrint(
+        'BackTrace: exitIntent duplicate ignored (+${delta.inMilliseconds}ms)',
+      );
+      return;
+    }
+    if (delta < const Duration(seconds: 2)) {
+      debugPrint('BackTrace: exit confirmed (+${delta.inMilliseconds}ms)');
+      SystemNavigator.pop();
+      return;
+    }
   }
   _lastExitIntentAt = now;
-  ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
-  ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+  debugPrint('BackTrace: exit prompt shown');
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  messenger?.hideCurrentSnackBar();
+  final controller = messenger?.showSnackBar(
     const SnackBar(
       content: Text('再按一次返回键退出应用'),
       duration: Duration(seconds: 2),
     ),
   );
+  _lastExitSnackBar = controller;
+  controller?.closed.whenComplete(() {
+    if (identical(controller, _lastExitSnackBar)) _lastExitSnackBar = null;
+  });
 }
 
 ThemeData televisionTheme(ThemeData theme) {

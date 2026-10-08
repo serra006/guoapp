@@ -1157,6 +1157,9 @@ class _HomeScreenState extends State<HomeScreen> {
           // 搜索），已在首页且无事可做时弹退出确认，避免误触直接退出应用。
           canPop: !television && !_selectionMode,
           onPopInvokedWithResult: (didPop, result) {
+            debugPrint(
+              'BackTrace: home pop didPop=$didPop sel=$_selectionMode tab=$_tab',
+            );
             if (didPop) return;
             if (_selectionMode || _tab != 0 || _search.text.isNotEmpty) {
               _televisionBack();

@@ -88,6 +88,7 @@ class _AppBootstrapState extends State<AppBootstrap>
 
   bool _handleBackKey(KeyEvent event) {
     if (event.logicalKey != LogicalKeyboardKey.goBack) return false;
+    debugPrint('BackTrace: hw key ${event.runtimeType}');
     if (event is KeyDownEvent) {
       // 首次按下：统一触发一次路由返回（手机等仍走 Flutter 按键路径）
       _onBackRequested();
@@ -105,19 +106,32 @@ class _AppBootstrapState extends State<AppBootstrap>
       'duanju/back',
     ).setMethodCallHandler((call) async {
       if (call.method == 'backRequested') {
+        debugPrint('BackTrace: native backRequested');
         _onBackRequested();
       }
       return null;
     });
   }
 
+  bool _backHandling = false;
+
   Future<void> _onBackRequested() async {
-    final navigator = this.navigator.currentState;
-    if (navigator == null) return;
-    // 统一走路由返回：关闭弹窗/面板、退出播放回目录、首页状态回退。
-    // 被 PopScope 拦截时，各页面自己的 onPopInvoked 已完成对应处理
-    // （状态回退，或调用 requestExitConfirmation 提示双击退出）。
-    await navigator.maybePop();
+    // 防重入：同一次按键可能被框架层与原生层同时投递，只处理第一次。
+    if (_backHandling) {
+      debugPrint('BackTrace: onBackRequested reentrant ignored');
+      return;
+    }
+    _backHandling = true;
+    try {
+      final navigator = this.navigator.currentState;
+      if (navigator == null) return;
+      // 统一走路由返回：关闭弹窗/面板、退出播放回目录、首页状态回退。
+      // 被 PopScope 拦截时，各页面自己的 onPopInvoked 已完成对应处理
+      // （状态回退，或调用 requestExitConfirmation 提示双击退出）。
+      await navigator.maybePop();
+    } finally {
+      _backHandling = false;
+    }
   }
 
   @override
@@ -247,6 +261,7 @@ class _ExitGuard extends StatelessWidget {
   Widget build(BuildContext context) => PopScope(
     canPop: false,
     onPopInvokedWithResult: (didPop, result) {
+      debugPrint('BackTrace: exitGuard pop didPop=$didPop');
       if (didPop) return;
       requestExitConfirmation(context);
     },
