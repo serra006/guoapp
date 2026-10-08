@@ -8,6 +8,27 @@ export 'app_build.dart';
 
 const appVersion = '0.2.64';
 
+DateTime? _lastExitIntentAt;
+
+/// 电视上的退出确认：2 秒内第二次按返回才真正退出，否则显示提示（防误触）。
+/// 使用 SnackBar 而非对话框——对话框是路由，会被后续返回事件意外关闭。
+void requestExitConfirmation(BuildContext context) {
+  final now = DateTime.now();
+  if (_lastExitIntentAt != null &&
+      now.difference(_lastExitIntentAt!) < const Duration(seconds: 2)) {
+    SystemNavigator.pop();
+    return;
+  }
+  _lastExitIntentAt = now;
+  ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+  ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+    const SnackBar(
+      content: Text('再按一次返回键退出应用'),
+      duration: Duration(seconds: 2),
+    ),
+  );
+}
+
 ThemeData televisionTheme(ThemeData theme) {
   final colors = theme.colorScheme;
   final focusSide = WidgetStateProperty.resolveWith<BorderSide?>(

@@ -420,29 +420,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _confirmExit(BuildContext context) {
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('退出应用'),
-        content: const Text('确定要退出吗？'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.of(dialogContext).pop();
-              SystemNavigator.pop();
-            },
-            child: const Text('退出'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   void initState() {
     super.initState();
@@ -1185,7 +1162,7 @@ class _HomeScreenState extends State<HomeScreen> {
               _televisionBack();
               return;
             }
-            if (television) _confirmExit(context);
+            if (television) requestExitConfirmation(context);
           },
           child: CallbackShortcuts(
             bindings: {

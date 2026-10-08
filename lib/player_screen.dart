@@ -1535,32 +1535,13 @@ class _PlayerScreenState extends State<PlayerScreen>
           _rotate();
           return;
         }
-        // 电视：播放中按返回 = 退出播放回到目录；若无上级路由则弹退出确认
+        // 电视：播放中按返回 = 退出播放回到目录；若无上级路由则提示双击退出
         final navigator = Navigator.of(context);
         if (navigator.canPop()) {
           navigator.pop();
           return;
         }
-        showDialog<void>(
-          context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('退出应用'),
-            content: const Text('确定要退出吗？'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  Navigator.of(dialogContext).pop();
-                  SystemNavigator.pop();
-                },
-                child: const Text('退出'),
-              ),
-            ],
-          ),
-        );
+        requestExitConfirmation(context);
       },
       child: CallbackShortcuts(
         bindings: {

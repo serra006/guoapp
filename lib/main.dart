@@ -60,6 +60,9 @@ class _AppBootstrapState extends State<AppBootstrap>
 
   @override
   void dispose() {
+    if (Platform.isAndroid) {
+      HardwareKeyboard.instance.removeHandler(_handleBackKey);
+    }
     WidgetsBinding.instance.removeObserver(this);
     LanController.current?.dispose();
     LanController.current = null;
@@ -73,7 +76,31 @@ class _AppBootstrapState extends State<AppBootstrap>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (Platform.isAndroid) {
+      // 全局接管遥控器返回键：一次物理按键只触发一次返回。
+      // keyUp 与长按重复事件全部吞掉，否则系统会再次触发返回，导致
+      // 一次返回连退多级页面 / 确认弹窗闪现即逝。
+      HardwareKeyboard.instance.addHandler(_handleBackKey);
+    }
     _initialize();
+  }
+
+  bool _handleBackKey(KeyEvent event) {
+    if (event.logicalKey != LogicalKeyboardKey.goBack) return false;
+    if (event is KeyDownEvent && !event.repeat) {
+      _onBackRequested();
+      return true;
+    }
+    return true; // keyUp 与 repeat：吞掉
+  }
+
+  Future<void> _onBackRequested() async {
+    final navigator = this.navigator.currentState;
+    if (navigator == null) return;
+    // 统一走路由返回：关闭弹窗/面板、退出播放回目录、首页状态回退。
+    // 被 PopScope 拦截时，各页面自己的 onPopInvoked 已完成对应处理
+    // （状态回退，或调用 requestExitConfirmation 提示双击退出）。
+    await navigator.maybePop();
   }
 
   @override
@@ -193,7 +220,7 @@ class _AppBootstrapState extends State<AppBootstrap>
   );
 }
 
-/// 根路由退出保护：遥控器返回到首页再按返回时，弹出确认对话框防止误退出。
+/// 根路由退出保护：遥控器返回到账号页再按返回时，双击确认防止误退出。
 class _ExitGuard extends StatelessWidget {
   const _ExitGuard({required this.child});
 
@@ -204,26 +231,7 @@ class _ExitGuard extends StatelessWidget {
     canPop: false,
     onPopInvokedWithResult: (didPop, result) {
       if (didPop) return;
-      showDialog<void>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('退出应用'),
-          content: const Text('确定要退出吗？'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-                SystemNavigator.pop();
-              },
-              child: const Text('退出'),
-            ),
-          ],
-        ),
-      );
+      requestExitConfirmation(context);
     },
     child: child,
   );
