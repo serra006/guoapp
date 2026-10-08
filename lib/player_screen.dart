@@ -182,15 +182,17 @@ class _PlayerScreenState extends State<PlayerScreen>
     widget.store.addListener(_accessChanged);
     _player =
         widget.playerFactory?.call() ??
-        (Platform.isAndroid
+        (Platform.isAndroid && !AppDevice.isTv
             ? LunaExoPlayer()
+            // 电视使用 libmpv：红果 CENC 加密 mp4 需要 ffmpeg decryption_key 解密，
+            // ExoPlayer（video_player 插件）无法传入解密密钥，播放必然失败。
             : Player(
                 configuration: const PlayerConfiguration(
                   bufferSize: 32 * 1024 * 1024,
                   logLevel: MPVLogLevel.error,
                 ),
               ));
-    _video = widget.videoBuilder == null && !Platform.isAndroid
+    _video = widget.videoBuilder == null && _player is! LunaExoPlayer
         ? VideoController(
             _player,
             configuration: VideoControllerConfiguration(

@@ -84,6 +84,9 @@ class AppDevice {
   const AppDevice({this.television = false, this.version = appVersion});
   final bool television;
   final String version;
+  /// 最近一次设备检测结果（main 启动与恢复时刷新）。
+  /// 供无法访问 BuildContext 的初始化逻辑（如播放器创建）同步判断电视设备。
+  static bool isTv = false;
   static const channel = MethodChannel('duanju/device');
 
   static Future<AppDevice> detect({

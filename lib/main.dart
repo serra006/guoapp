@@ -39,6 +39,7 @@ Future<void> main(List<String> arguments) async {
     return;
   }
   final device = await AppDevice.detect();
+  AppDevice.isTv = device.television;
   runApp(AppBootstrap(device: device));
 }
 
@@ -100,6 +101,7 @@ class _AppBootstrapState extends State<AppBootstrap>
 
   Future<void> _refreshDevice() async {
     final detected = await AppDevice.detect(fallback: device);
+    AppDevice.isTv = detected.television;
     if (!mounted ||
         (device.television == detected.television &&
             device.version == detected.version)) {
