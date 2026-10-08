@@ -78,14 +78,19 @@ func (downloader *Downloader) fetchHongguoAppCatalogCategory(ctx context.Context
 		pages  int
 	}
 	scans := make([]feedScan, len(genres))
+	// 每个扫描流的最大页数：首次构建与常规头部增量都只拉前几页，
+	// 保证首页秒开；后续翻页（more）与更新（update）再继续补全。
+	scanLimits := make([]int, len(genres))
 	for index, genre := range genres {
 		cursor := state.Feeds[feedKey(genre.key)]
 		if !more && cursor.Initialized {
 			scans[index].head = true
 			scans[index].tail = cursor
+			scanLimits[index] = headLimit
 		} else {
 			scans[index].cursor = cursor
 			scans[index].done = cursor.Exhausted
+			scanLimits[index] = headLimit
 		}
 	}
 	seen := map[string]int{}
@@ -93,11 +98,11 @@ func (downloader *Downloader) fetchHongguoAppCatalogCategory(ctx context.Context
 	var failures []error
 	for round := 0; round < roundLimit; round++ {
 		active := false
-		for index, genre := range genres {
-			scan := &scans[index]
-			if scan.done || !scan.head && scan.pages >= pageLimit {
-				continue
-			}
+	for index, genre := range genres {
+		scan := &scans[index]
+		if scan.done || !scan.head && scan.pages >= scanLimits[index] {
+			continue
+		}
 			if err := ctx.Err(); err != nil {
 				return dramas, err
 			}
@@ -178,6 +183,7 @@ func (downloader *Downloader) fetchHongguoAppCatalogCategory(ctx context.Context
 
 					scan.cursor = checkpoint
 					scan.head, scan.done, scan.pages = false, false, 0
+					scanLimits[index] = pageLimit
 				}
 			}
 			client.mu.Lock()
