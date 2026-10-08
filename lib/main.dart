@@ -82,19 +82,33 @@ class _AppBootstrapState extends State<AppBootstrap>
       // 一次返回连退多级页面 / 确认弹窗闪现即逝。
       HardwareKeyboard.instance.addHandler(_handleBackKey);
     }
+    _listenNativeBack();
     _initialize();
   }
 
   bool _handleBackKey(KeyEvent event) {
     if (event.logicalKey != LogicalKeyboardKey.goBack) return false;
     if (event is KeyDownEvent) {
-      // 首次按下：统一触发一次路由返回
+      // 首次按下：统一触发一次路由返回（手机等仍走 Flutter 按键路径）
       _onBackRequested();
       return true;
     }
     // KeyRepeatEvent（长按连发）与 KeyUpEvent：吞掉，
     // 避免一次物理按键触发多次返回（连退多级页面 / 弹窗闪现）。
     return true;
+  }
+
+  /// 电视端：原生层完全接管返回键，通过 duanju/back 通道回调（见 MainActivity.onKeyDown）。
+  void _listenNativeBack() {
+    if (!Platform.isAndroid) return;
+    const MethodChannel(
+      'duanju/back',
+    ).setMethodCallHandler((call) async {
+      if (call.method == 'backRequested') {
+        _onBackRequested();
+      }
+      return null;
+    });
   }
 
   Future<void> _onBackRequested() async {
@@ -321,33 +335,35 @@ class DuanjuApp extends StatelessWidget {
                   repository: repository,
                   store: store!,
                 )
-        : Scaffold(
-            body: Center(
-              child: Padding(
-                padding: const EdgeInsets.all(32),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.play_circle_fill_rounded,
-                      color: Color(0xFFFF765F),
-                      size: 72,
-                    ),
-                    const SizedBox(height: 24),
-                    Text(
-                      bootstrapError ?? '正在打开$appName',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 18),
-                    ),
-                    const SizedBox(height: 24),
-                    if (bootstrapError == null)
-                      const CircularProgressIndicator()
-                    else
-                      FilledButton(
-                        onPressed: onRetry,
-                        child: const Text('重新打开'),
+        : _ExitGuard(
+            child: Scaffold(
+              body: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.play_circle_fill_rounded,
+                        color: Color(0xFFFF765F),
+                        size: 72,
                       ),
-                  ],
+                      const SizedBox(height: 24),
+                      Text(
+                        bootstrapError ?? '正在打开$appName',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 18),
+                      ),
+                      const SizedBox(height: 24),
+                      if (bootstrapError == null)
+                        const CircularProgressIndicator()
+                      else
+                        FilledButton(
+                          onPressed: onRetry,
+                          child: const Text('重新打开'),
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),

@@ -20,6 +20,7 @@ import android.net.ConnectivityManager
 import android.net.Uri
 import android.util.Rational
 import android.view.InputDevice
+import android.view.KeyEvent
 import android.view.WindowManager
 import android.provider.Settings
 import io.flutter.embedding.engine.FlutterEngine
@@ -29,6 +30,7 @@ class MainActivity : FlutterActivity() {
     private var headroomReadAt = 0L
     private var thermalHeadroom: Double? = null
     private var deviceChannel: MethodChannel? = null
+    private var backChannel: MethodChannel? = null
     private var televisionMode = false
 
     @Suppress("DEPRECATION")
@@ -119,8 +121,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         deviceChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "duanju/device")
-            .also { channel ->
-                channel.setMethodCallHandler { call, result ->
+            .also { channel ->                channel.setMethodCallHandler { call, result ->
                     when (call.method) {
                         "deviceInfo" -> {
                             val version = packageManager.getPackageInfo(packageName, 0).versionName
@@ -227,6 +228,26 @@ class MainActivity : FlutterActivity() {
                     }
                 }
             }
+        backChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "duanju/back")
+        // 电视上完全接管返回键：keyDown 触发一次 Dart 回调，keyUp/长按重复全部吞掉。
+        // 否则系统会在 keyUp 再次触发返回，导致一次按键连退多级页面、确认弹窗闪现即逝。
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (televisionMode && keyCode == KeyEvent.KEYCODE_BACK) {
+            if (event?.repeatCount == 0) {
+                backChannel?.invokeMethod("backRequested", null)
+            }
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (televisionMode && keyCode == KeyEvent.KEYCODE_BACK) {
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
     }
 
     private fun pictureInPictureSupported(): Boolean {
