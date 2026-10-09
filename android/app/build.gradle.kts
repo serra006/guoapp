@@ -42,14 +42,16 @@ android {
 
     flavorDimensions += "platform"
     productFlavors {
-        // 手机/平板：与历史版本保持一致（同包名覆盖升级）
+        // 手机/平板：红果鉴沿用历史包名（覆盖升级）；真果鉴独立包名，可与红果鉴并存
         create("phone") {
             dimension = "platform"
+            if (allSources) applicationId = "com.duanju.zhenguojian"
         }
-        // 电视/盒子：独立包名，可与手机版并存；仅电视桌面(LEANBACK)可见
+        // 电视/盒子：红果鉴沿用历史包名；真果鉴独立包名，可与红果鉴并存。
+        // 仅电视桌面(LEANBACK)可见
         create("tv") {
             dimension = "platform"
-            applicationId = "com.duanju.duanju_app.tv"
+            applicationId = if (allSources) "com.duanju.zhenguojian.tv" else "com.duanju.duanju_app.tv"
             versionNameSuffix = "-tv"
             manifestPlaceholders["appLabel"] = if (allSources) "真果鉴 TV" else "红果鉴 TV"
             manifestPlaceholders["appBanner"] = if (allSources) "@drawable/tv_banner_all_sources" else "@drawable/tv_banner"
