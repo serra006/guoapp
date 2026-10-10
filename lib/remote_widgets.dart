@@ -448,6 +448,7 @@ class TelevisionSearchDialog extends StatefulWidget {
     super.key,
     required this.initialValue,
     required this.title,
+    this.initialPrecise = false,
     this.suggestions,
     this.recentSearches = const [],
     this.onCancel,
@@ -457,6 +458,7 @@ class TelevisionSearchDialog extends StatefulWidget {
   final VoidCallback? onCancel;
   final String initialValue;
   final String title;
+  final bool initialPrecise;
 
   @override
   State<TelevisionSearchDialog> createState() => _TelevisionSearchDialogState();
@@ -464,6 +466,7 @@ class TelevisionSearchDialog extends StatefulWidget {
 
 class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
   late String _query = widget.initialValue;
+  late bool _precise = widget.initialPrecise;
   List<String> _results = [];
   bool _searching = false;
   Timer? _debounce;
@@ -544,11 +547,12 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
   void _submit(String text) {
     var target = text.trim();
     if (target.isEmpty) return;
-    // 若用户输入纯拼音头字母且已成功联想出短剧，直接点击搜索时优先取第一部短剧全名
+    // 纯拼音头字母输入统一替换为第一条联想全名再搜索；
+    // 精确模式的差异在结果页：只保留剧名包含关键词的条目（见 HomeScreen._load）。
     if (_results.isNotEmpty && RegExp(r'^[a-zA-Z0-9]+$').hasMatch(target)) {
       target = _results.first;
     }
-    Navigator.pop(context, target);
+    Navigator.pop(context, (target, _precise));
   }
 
   @override
@@ -589,7 +593,9 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      _query.isEmpty ? '按遥控器输入剧名拼音头字母 (如: BFLC)' : _query,
+                      _query.isEmpty
+                          ? (_precise ? '精确模式：输入完整剧名或关键词，结果只保留剧名包含该词的条目' : '按遥控器输入剧名拼音头字母 (如: BFLC)')
+                          : _query,
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: _query.isEmpty ? FontWeight.normal : FontWeight.bold,
@@ -647,7 +653,7 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
                           ),
                         ),
                         const SizedBox(height: 8),
-                        // 底部三大功能键
+                        // 底部功能键：退格 / 清空 / 精确模式 / 搜索
                         Row(
                           children: [
                             Expanded(
@@ -668,9 +674,21 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: RemoteButton(
+                                label: _precise ? '精确:开' : '精确:关',
+                                icon: _precise
+                                    ? Icons.center_focus_strong_rounded
+                                    : Icons.center_focus_weak_rounded,
+                                selected: _precise,
+                                onPressed: () =>
+                                    setState(() => _precise = !_precise),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: RemoteButton(
                                 label: '搜索',
                                 icon: Icons.search_rounded,
-                                selected: true,
+                                selected: !_precise,
                                 onPressed: () => _submit(_query),
                               ),
                             ),
@@ -723,8 +741,13 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
                               : (_results.isEmpty
                                   ? Center(
                                       child: Text(
-                                        _searching ? '搜索中...' : '按【搜索】直接查找 “$_query”',
+                                        _searching
+                                            ? '搜索中...'
+                                            : (_precise
+                                                ? '按【搜索】精确查找 “$_query”（仅保留剧名匹配）'
+                                                : '按【搜索】直接查找 “$_query”'),
                                         style: TextStyle(color: theme.hintColor),
+                                        textAlign: TextAlign.center,
                                       ),
                                     )
                                   : ListView.separated(

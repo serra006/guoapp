@@ -70,6 +70,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _refreshingUpdatedCache = false;
   bool _selectionMode = false;
   bool _showRecommendations = false;
+  bool _preciseSearch = false;
   final _recentTaps = RepeatTapGate();
   String _sourceSignature = '';
   bool _catalogLoadScheduled = false;
@@ -390,10 +391,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _televisionSearch() async {
-    final query = await showDialog<String>(
+    final result = await showDialog<(String, bool)>(
       context: context,
       builder: (_) => TelevisionSearchDialog(
         initialValue: _search.text,
+        initialPrecise: _preciseSearch,
         title: _group.id == 'all'
             ? '搜索已开放站源'
             : _onlineSearch
@@ -404,8 +406,8 @@ class _HomeScreenState extends State<HomeScreen> {
         suggestions: _searchSuggestions ? widget.repository.suggestions : null,
       ),
     );
-    if (query != null && mounted) {
-      _submitSearch(query);
+    if (result != null && mounted) {
+      _submitSearch(result.$1, precise: result.$2);
     }
   }
 
@@ -528,13 +530,26 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     void accept(CatalogPage result, {bool cached = false}) {
       if (!mounted || generation != _generation) return;
+      // 精确模式：只保留剧名包含完整关键词的结果，过滤联想/首字母带来的弱相关条目。
+      var items = result.items;
+      var warning = result.warning;
+      if (_preciseSearch && query.isNotEmpty) {
+        final needle = _normalizeSearchText(query);
+        final matched = items
+            .where((drama) => _normalizeSearchText(drama.title).contains(needle))
+            .toList();
+        if (matched.isEmpty && items.isNotEmpty) {
+          warning = '精确模式下没有剧名包含“$query”的结果，可关闭精确模式重试';
+        }
+        items = matched;
+      }
       setState(() {
-        _items = result.items;
+        _items = items;
         _hasMore = result.hasMore;
         _submittedQuery = query;
         _loading = cached && !result.fresh;
         _loadingMore = false;
-        _error = result.warning.isEmpty ? null : result.warning;
+        _error = warning.isEmpty ? null : warning;
       });
       unawaited(
         saveUserChange(context, () => widget.store.refreshDramas(result.items)),
@@ -608,7 +623,12 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _submitSearch(String query) {
+  /// 归一化搜索文本：小写、去空白与标点，供精确匹配剧名使用。
+  String _normalizeSearchText(String text) => text
+      .toLowerCase()
+      .replaceAll(RegExp(r'[\s\p{P}]', unicode: true), '');
+
+  void _submitSearch(String query, {bool? precise}) {
     if (_showRecommendations) {
       _showRecommendations = false;
       _categorySelections[_group.id] = '';
@@ -617,6 +637,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _selectedDramas.clear();
     _search.text = query.trim();
     _debounce?.cancel();
+    if (precise != null) _preciseSearch = precise;
     if (_search.text.isNotEmpty) {
       unawaited(
         saveUserChange(
@@ -1200,6 +1221,28 @@ class _HomeScreenState extends State<HomeScreen> {
               onChanged: _searchChanged,
               onCancel: () => unawaited(widget.repository.cancelSuggestions()),
               onSearch: _submitSearch,
+            ),
+          ),
+        if (_searchVisible && !television && _onlineSearch)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: FilterChip(
+                selected: _preciseSearch,
+                showCheckmark: false,
+                avatar: Icon(
+                  _preciseSearch
+                      ? Icons.center_focus_strong_rounded
+                      : Icons.center_focus_weak_rounded,
+                  size: 18,
+                ),
+                label: const Text('精确匹配：只显示剧名包含关键词的结果'),
+                onSelected: (value) {
+                  setState(() => _preciseSearch = value);
+                  if (_search.text.trim().isNotEmpty) _load();
+                },
+              ),
             ),
           ),
         if (_searchVisible &&
