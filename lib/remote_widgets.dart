@@ -467,6 +467,7 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
     text: widget.initialValue,
   );
   late String _query = widget.initialValue;
+  final FocusNode _searchButtonFocus = FocusNode();
   List<String> _results = [];
   bool _searching = false;
   Timer? _debounce;
@@ -492,6 +493,7 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
   void dispose() {
     _debounce?.cancel();
     _controller.dispose();
+    _searchButtonFocus.dispose();
     super.dispose();
   }
 
@@ -574,10 +576,33 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
     Navigator.pop(context, target);
   }
 
+  /// 焦点当前是否在输入框内（拼音输入法打开/编辑中）。
+  bool get _isEditing {
+    final focus = FocusManager.instance.primaryFocus;
+    return focus?.context?.findAncestorStateOfType<EditableTextState>() != null;
+  }
+
+  /// 返回键处理：输入框有焦点时只收起拼音键盘并把焦点交给【搜索】键，
+  /// 不退出对话框；焦点不在输入框时才真正关闭。
+  void _onBackPressed() {
+    if (_isEditing) {
+      FocusManager.instance.primaryFocus?.unfocus();
+      _searchButtonFocus.requestFocus();
+      return;
+    }
+    Navigator.pop(context);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return AlertDialog(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _onBackPressed();
+      },
+      child: AlertDialog(
       titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
       contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
       title: Row(
@@ -611,7 +636,7 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
                   color: theme.colorScheme.primary,
                   size: 28,
                 ),
-                hintText: '弹出拼音键盘输入剧名，或用左侧字母键按首字母联想',
+                hintText: '打拼音输入剧名；按【返回】收起键盘并选中搜索键',
                 hintStyle: TextStyle(fontSize: 16, color: theme.hintColor),
                 filled: true,
                 fillColor: theme.colorScheme.surfaceContainerHighest
@@ -694,6 +719,7 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
                                 label: '搜索',
                                 icon: Icons.search_rounded,
                                 selected: true,
+                                focusNode: _searchButtonFocus,
                                 onPressed: () => _submit(_query),
                               ),
                             ),
@@ -775,6 +801,7 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
             ),
           ],
         ),
+      ),
       ),
     );
   }
