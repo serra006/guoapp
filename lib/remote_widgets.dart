@@ -448,7 +448,6 @@ class TelevisionSearchDialog extends StatefulWidget {
     super.key,
     required this.initialValue,
     required this.title,
-    this.initialPrecise = false,
     this.suggestions,
     this.recentSearches = const [],
     this.onCancel,
@@ -458,15 +457,16 @@ class TelevisionSearchDialog extends StatefulWidget {
   final VoidCallback? onCancel;
   final String initialValue;
   final String title;
-  final bool initialPrecise;
 
   @override
   State<TelevisionSearchDialog> createState() => _TelevisionSearchDialogState();
 }
 
 class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialValue,
+  );
   late String _query = widget.initialValue;
-  late bool _precise = widget.initialPrecise;
   List<String> _results = [];
   bool _searching = false;
   Timer? _debounce;
@@ -491,17 +491,35 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _controller.dispose();
     super.dispose();
   }
 
+  void _syncQuery(String value) {
+    _query = value;
+    _onQueryChanged();
+  }
+
   void _onKeyPress(String char) {
-    setState(() => _query += char);
+    setState(() {
+      _query += char;
+      _controller.text = _query;
+      _controller.selection = TextSelection.collapsed(
+        offset: _controller.text.length,
+      );
+    });
     _onQueryChanged();
   }
 
   void _onBackspace() {
     if (_query.isNotEmpty) {
-      setState(() => _query = _query.substring(0, _query.length - 1));
+      setState(() {
+        _query = _query.substring(0, _query.length - 1);
+        _controller.text = _query;
+        _controller.selection = TextSelection.collapsed(
+          offset: _controller.text.length,
+        );
+      });
       _onQueryChanged();
     }
   }
@@ -511,6 +529,7 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
       setState(() {
         _query = '';
         _results = [];
+        _controller.clear();
       });
       _debounce?.cancel();
     }
@@ -548,11 +567,11 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
     var target = text.trim();
     if (target.isEmpty) return;
     // 纯拼音头字母输入统一替换为第一条联想全名再搜索；
-    // 精确模式的差异在结果页：只保留剧名包含关键词的条目（见 HomeScreen._load）。
+    // 拼音输入法组合出的中文剧名原样搜索。
     if (_results.isNotEmpty && RegExp(r'^[a-zA-Z0-9]+$').hasMatch(target)) {
       target = _results.first;
     }
-    Navigator.pop(context, (target, _precise));
+    Navigator.pop(context, target);
   }
 
   @override
@@ -578,40 +597,38 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
         height: 520,
         child: Column(
           children: [
-            // 顶部只读搜索显示条，彻底杜绝系统软键盘弹出
-            Container(
-              height: 56,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: .5),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: theme.colorScheme.primary.withValues(alpha: .3)),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.search_rounded, color: theme.colorScheme.primary, size: 28),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      _query.isEmpty
-                          ? (_precise ? '精确模式：输入完整剧名或关键词，结果只保留剧名包含该词的条目' : '按遥控器输入剧名拼音头字母 (如: BFLC)')
-                          : _query,
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: _query.isEmpty ? FontWeight.normal : FontWeight.bold,
-                        color: _query.isEmpty
-                            ? theme.hintColor
-                            : theme.colorScheme.onSurface,
-                        letterSpacing: _query.isEmpty ? 0 : 2,
-                      ),
-                    ),
+            // 顶部可编辑搜索框：聚焦后自动弹出系统拼音输入法（搜狗 TV 版），
+            // 遥控器可直接打全拼精确输入剧名；也可用左侧字母键盘按首字母联想。
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              keyboardType: TextInputType.text,
+              textInputAction: TextInputAction.search,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              decoration: InputDecoration(
+                prefixIcon: Icon(
+                  Icons.search_rounded,
+                  color: theme.colorScheme.primary,
+                  size: 28,
+                ),
+                hintText: '弹出拼音键盘输入剧名，或用左侧字母键按首字母联想',
+                hintStyle: TextStyle(fontSize: 16, color: theme.hintColor),
+                filled: true,
+                fillColor: theme.colorScheme.surfaceContainerHighest
+                    .withValues(alpha: .5),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(
+                    color: theme.colorScheme.primary.withValues(alpha: .3),
                   ),
-                  if (_query.isNotEmpty) ...[
-                    Text('${_query.length} 字母', style: TextStyle(color: theme.hintColor, fontSize: 14)),
-                    const SizedBox(width: 8),
-                  ],
-                ],
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
               ),
+              onChanged: _syncQuery,
+              onSubmitted: _submit,
             ),
             const SizedBox(height: 16),
             // 主体区域：左侧爱奇艺式字母键盘，右侧智能联想与历史
@@ -653,7 +670,7 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
                           ),
                         ),
                         const SizedBox(height: 8),
-                        // 底部功能键：退格 / 清空 / 精确模式 / 搜索
+                        // 底部功能键：退格 / 清空 / 搜索
                         Row(
                           children: [
                             Expanded(
@@ -674,21 +691,9 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: RemoteButton(
-                                label: _precise ? '精确:开' : '精确:关',
-                                icon: _precise
-                                    ? Icons.center_focus_strong_rounded
-                                    : Icons.center_focus_weak_rounded,
-                                selected: _precise,
-                                onPressed: () =>
-                                    setState(() => _precise = !_precise),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: RemoteButton(
                                 label: '搜索',
                                 icon: Icons.search_rounded,
-                                selected: !_precise,
+                                selected: true,
                                 onPressed: () => _submit(_query),
                               ),
                             ),
@@ -743,9 +748,7 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
                                       child: Text(
                                         _searching
                                             ? '搜索中...'
-                                            : (_precise
-                                                ? '按【搜索】精确查找 “$_query”（仅保留剧名匹配）'
-                                                : '按【搜索】直接查找 “$_query”'),
+                                            : '按【搜索】直接查找 “$_query”',
                                         style: TextStyle(color: theme.hintColor),
                                         textAlign: TextAlign.center,
                                       ),
