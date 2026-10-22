@@ -212,7 +212,7 @@ jobs:
           fi
           {
             printf '%s\n\n' "版本 ${version}。电视端只有「真果TV」一个应用，包含全部站源："
-            printf '%s\n' "- 真果TV zhenguojian-tv：电视/盒子版，全部站源（独立包名 com.duanju.zhenguojian.tv，仅电视桌面显示，遥控器操作）"
+            printf '%s\n' "- 真果TV zhenguojian-tv：电视/盒子版，全部站源（独立包名 com.duanju.zhenguo.tv，仅电视桌面显示，遥控器操作，可与旧版红果鉴/真果鉴并存）"
             printf '%s\n' "- 真果鉴 zhenguojian：手机/平板版，全部站源"
             printf '\n%s\n' "$apk_note"
             printf '%s\n' "- *-arm64-v8a.apk：绝大多数手机选这个"

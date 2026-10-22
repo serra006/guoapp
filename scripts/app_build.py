@@ -60,4 +60,4 @@ def add_variant_argument(parser):
     parser.add_argument('--all-sources', action='store_true',
                         help='构建包含全部站源的多源版（电视版固定为全站源，无需此参数）')
     parser.add_argument('--flavor', choices=['phone', 'tv'], default='phone',
-                        help='tv=电视版「真果TV」（包名 com.duanju.zhenguojian.tv，仅电视桌面可见）')
+                        help='tv=电视版「真果TV」（包名 com.duanju.zhenguo.tv，仅电视桌面可见）')

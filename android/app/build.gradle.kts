@@ -38,10 +38,11 @@ android {
             dimension = "platform"
             applicationId = "com.duanju.zhenguojian"
         }
-        // 电视/盒子：包名 com.duanju.zhenguojian.tv，仅电视桌面(LEANBACK)可见
+        // 电视/盒子：包名 com.duanju.zhenguo.tv（与历史「真果鉴 TV」的
+        // com.duanju.zhenguojian.tv 不同，两者可并存，互不覆盖）
         create("tv") {
             dimension = "platform"
-            applicationId = "com.duanju.zhenguojian.tv"
+            applicationId = "com.duanju.zhenguo.tv"
             versionNameSuffix = "-tv"
             manifestPlaceholders["appLabel"] = "真果TV"
             manifestPlaceholders["appBanner"] = "@drawable/tv_banner_all_sources"

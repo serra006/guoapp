@@ -1,12 +1,12 @@
 # Android TV 适配改造说明
 
-基线：上游 guoapp 0.2.64+71（zip 快照，无 git）。本次改造目标：独立 TV 版安卓应用「真果TV」（`com.duanju.zhenguojian.tv`），修复全部 P0 级电视不可用问题。
+基线：上游 guoapp 0.2.64+71（zip 快照，无 git）。本次改造目标：独立 TV 版安卓应用「真果TV」（`com.duanju.zhenguo.tv`），修复全部 P0 级电视不可用问题。
 
 ## 一、独立 TV 版（flavor `tv`）
 
 | 项 | 手机版（flavor `phone`） | 电视版（flavor `tv`） |
 | --- | --- | --- |
-| 包名 | `com.duanju.zhenguojian` | `com.duanju.zhenguojian.tv` |
+| 包名 | `com.duanju.zhenguojian` | `com.duanju.zhenguo.tv` |
 | 应用名 | 真果鉴 | 真果TV |
 | versionName | 0.2.64 | 0.2.64-tv |
 | 桌面入口 | 手机桌面 | 仅电视桌面（LEANBACK_LAUNCHER） |
