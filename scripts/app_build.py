@@ -7,10 +7,17 @@ class BuildVariant:
     all_sources: bool = False
     flavor: str = 'phone'  # phone=手机/平板, tv=电视/盒子(独立包名)
 
+    def __post_init__(self):
+        # 电视版只有一个发行版「真果TV」，固定走全站源，
+        # 防止漏传 --all-sources 产出「名字对、站源少」的错误包
+        if self.flavor == 'tv' and not self.all_sources:
+            object.__setattr__(self, 'all_sources', True)
+
     @property
     def name(self):
-        label = '真果鉴' if self.all_sources else '红果鉴'
-        return f'{label} TV' if self.flavor == 'tv' else label
+        if self.flavor == 'tv':
+            return '真果TV'
+        return '真果鉴' if self.all_sources else '红果鉴'
 
     @property
     def slug(self):
@@ -51,6 +58,6 @@ class BuildVariant:
 
 def add_variant_argument(parser):
     parser.add_argument('--all-sources', action='store_true',
-                        help='构建包含全部站源的真果鉴；默认构建仅红果的红果鉴')
+                        help='构建包含全部站源的多源版（电视版固定为全站源，无需此参数）')
     parser.add_argument('--flavor', choices=['phone', 'tv'], default='phone',
-                        help='tv=电视版（独立包名 com.duanju.duanju_app.tv，仅电视桌面可见）')
+                        help='tv=电视版「真果TV」（包名 com.duanju.zhenguojian.tv，仅电视桌面可见）')

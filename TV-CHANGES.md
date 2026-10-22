@@ -1,13 +1,13 @@
 # Android TV 适配改造说明
 
-基线：上游 guoapp 0.2.64+71（zip 快照，无 git）。本次改造目标：独立 TV 版安卓应用（`com.duanju.duanju_app.tv`），修复全部 P0 级电视不可用问题。
+基线：上游 guoapp 0.2.64+71（zip 快照，无 git）。本次改造目标：独立 TV 版安卓应用「真果TV」（`com.duanju.zhenguojian.tv`），修复全部 P0 级电视不可用问题。
 
 ## 一、独立 TV 版（flavor `tv`）
 
 | 项 | 手机版（flavor `phone`） | 电视版（flavor `tv`） |
 | --- | --- | --- |
-| 包名 | `com.duanju.duanju_app` | `com.duanju.duanju_app.tv` |
-| 应用名 | 红果鉴 / 真果鉴 | 真果TV / 真果TV 多源版 |
+| 包名 | `com.duanju.zhenguojian` | `com.duanju.zhenguojian.tv` |
+| 应用名 | 真果鉴 | 真果TV |
 | versionName | 0.2.64 | 0.2.64-tv |
 | 桌面入口 | 手机桌面 | 仅电视桌面（LEANBACK_LAUNCHER） |
 | 数据 | 独立 | 独立（可两版并存） |
@@ -16,16 +16,16 @@
 
 - `android/app/build.gradle.kts`：新增 `flavorDimensions platform` + `phone`/`tv` flavor。**引入 flavor 后必须始终 `--flavor` 构建**，裸 `flutter build apk` 会因 Gradle task 缺失失败。
 - `android/app/src/tv/AndroidManifest.xml`：用 `tools:node="replace"` 替换 MAIN intent-filter，只保留 LEANBACK_LAUNCHER；banner/label 走 manifestPlaceholders。
-- `lib/app_build.dart`：新增 `TV_BUILD` dart-define，`appName`/`appSlug` 自动带 TV 后缀。
-- `scripts/app_build.py`：`BuildVariant` 增加 `flavor` 字段；`flutter_arguments` 始终携带 `--flavor`；tv 额外注入 `--dart-define=TV_BUILD=true`；产物 slug 自动变 `hongguojian-tv-x.y.z`。
+- `lib/app_build.dart`：新增 `TV_BUILD` dart-define，`appName` 在电视端固定为「真果TV」。
+- `scripts/app_build.py`：`BuildVariant` 增加 `flavor` 字段；`flutter_arguments` 始终携带 `--flavor`；tv 额外注入 `--dart-define=TV_BUILD=true`，并强制 `all_sources=True`（电视端只发全站源单版本）；产物 slug 为 `zhenguojian-tv-x.y.z`。
 - `scripts/build_android.py`、`scripts/build_native.py`、`scripts/package_release.py`：消费 `--flavor` 参数。
+- `.github/workflows/build.yml`：构建矩阵收敛为 `zhenguojian` + `zhenguojian-tv` 两个变体，不再产出红果鉴。
 
 构建命令：
 
 ```sh
-python scripts/build_android.py --flavor tv              # 真果TV（单源）
-python scripts/build_android.py --flavor tv --all-sources  # 真果TV 多源版
-python scripts/build_android.py                          # 手机版（默认 phone，行为不变）
+python scripts/build_android.py --flavor tv   # 真果TV（电视版，全站源）
+python scripts/build_android.py               # 手机版（默认 phone，全站源需加 --all-sources）
 ```
 
 ## 二、P0 修复清单

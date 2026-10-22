@@ -1,18 +1,9 @@
 import java.util.Properties
-import java.util.Base64
 
 plugins {
     id("com.android.application")
     id("dev.flutter.flutter-gradle-plugin")
 }
-
-val dartDefines = providers.gradleProperty("dart-defines").orNull.orEmpty()
-    .split(",").filter { it.isNotEmpty() }
-    .associate {
-        val decoded = String(Base64.getDecoder().decode(it), Charsets.UTF_8)
-        decoded.substringBefore("=") to decoded.substringAfter("=", "")
-    }
-val allSources = dartDefines["ALL_SOURCES"] == "true"
 
 val releaseKey = rootProject.file("key.properties")
 val releaseProperties = Properties()
@@ -36,25 +27,24 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        manifestPlaceholders["appLabel"] = if (allSources) "真果鉴" else "红果鉴"
-        manifestPlaceholders["appBanner"] = if (allSources) "@drawable/tv_banner_all_sources" else "@drawable/tv_banner"
+        manifestPlaceholders["appLabel"] = "真果鉴"
+        manifestPlaceholders["appBanner"] = "@drawable/tv_banner_all_sources"
     }
 
     flavorDimensions += "platform"
     productFlavors {
-        // 手机/平板：红果鉴沿用历史包名（覆盖升级）；真果鉴独立包名，可与红果鉴并存
+        // 手机/平板：包名 com.duanju.zhenguojian
         create("phone") {
             dimension = "platform"
-            if (allSources) applicationId = "com.duanju.zhenguojian"
+            applicationId = "com.duanju.zhenguojian"
         }
-        // 电视/盒子：红果鉴沿用历史包名；真果鉴独立包名，可与红果鉴并存。
-        // 仅电视桌面(LEANBACK)可见
+        // 电视/盒子：包名 com.duanju.zhenguojian.tv，仅电视桌面(LEANBACK)可见
         create("tv") {
             dimension = "platform"
-            applicationId = if (allSources) "com.duanju.zhenguojian.tv" else "com.duanju.duanju_app.tv"
+            applicationId = "com.duanju.zhenguojian.tv"
             versionNameSuffix = "-tv"
-            manifestPlaceholders["appLabel"] = if (allSources) "真果TV 多源版" else "真果TV"
-            manifestPlaceholders["appBanner"] = if (allSources) "@drawable/tv_banner_all_sources" else "@drawable/tv_banner"
+            manifestPlaceholders["appLabel"] = "真果TV"
+            manifestPlaceholders["appBanner"] = "@drawable/tv_banner_all_sources"
         }
     }
 

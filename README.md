@@ -10,16 +10,15 @@
 
 ---
 
-## 两个版本
+## 一个应用
 
-| 版本 | 应用名 | 包名 | 站源 |
-| --- | --- | --- | --- |
-| 单源版 | 真果TV | `com.duanju.duanju_app.tv` | 仅红果 |
-| 多源版 | 真果TV 多源版 | `com.duanju.zhenguojian.tv` | 红果、韩小圈、鬼片、青空，以及黄豆、剧果、野果、帝果、黄果视频、黄果 AI、黄果旧版 |
+| 应用名 | 包名 | 站源 |
+| --- | --- | --- |
+| 真果TV | `com.duanju.zhenguojian.tv` | 红果、韩小圈、鬼片、青空，以及黄豆、剧果、野果、帝果、黄果视频、黄果 AI、黄果旧版 |
 
-- 两个版本 **包名独立、可同时安装**，桌面各有一个图标，数据互不影响。
+- 电视端只发布这一个应用，全部站源已内置，不需要再选版本。
 - 默认可见站源（红果、韩小圈、鬼片、青空）无需密码；其余站源默认隐藏，在站源管理中通过密码锁解锁后显示。
-- 版本由编译参数决定（`--all-sources`），应用内不可切换。
+- 早期的「红果鉴 / 真果鉴」双版本已停止维护。新包名与旧版不同，**首次安装请先卸载旧版**（数据不互通）。
 
 ## 电视端特性
 
@@ -32,11 +31,6 @@
 | 播放内核 | 电视端使用 media_kit / libmpv 解码，支持红果的 CENC 加密流（ExoPlayer 系无法传解密密钥） |
 | 亮度交给电视 | 播放页不接管屏幕亮度，交由电视系统与遥控器管理 |
 | 电视桌面入口 | 仅出现在电视桌面（LEANBACK），横屏锁定，独立电视横幅 |
-
-| 编译方式 | 应用名 | 站源 |
-| --- | --- | --- |
-| 默认 | 真果TV | 仅红果 |
-| 加 `--all-sources` | 真果TV 多源版 | 红果 + 其余全部站源 |
 
 ## 使用
 
@@ -96,8 +90,7 @@
 Flutter `3.47.4`、Dart `3.12+`、Go `1.24.1+`、Python `3.10+`。Android 需要 JDK 17、SDK 36、NDK `28.2.13676358`。
 
 ~~~sh
-python3 scripts/build_android.py --flavor tv                  # 真果TV（单源）
-python3 scripts/build_android.py --flavor tv --all-sources    # 真果TV 多源版
+python3 scripts/build_android.py --flavor tv                  # 真果TV（电视版，固定全站源）
 python3 scripts/build_android.py --flavor tv --abi arm64-v8a
 python3 scripts/build_android.py --flavor tv --cn-mirrors     # 国内镜像
 ~~~
@@ -106,12 +99,12 @@ python3 scripts/build_android.py --flavor tv --cn-mirrors     # 国内镜像
 
 ### GitHub Actions
 
-推送 `main` / `master`、`v*` 标签、提交 PR，或手动运行 **Build app packages**，自动构建 4 个变体：
+推送 `main` / `master`、`v*` 标签、提交 PR，或手动运行 **Build app packages**，自动构建 2 个变体：
 
 | 产物 | 内容 |
 | --- | --- |
-| `hongguojian-tv-android` / `zhenguojian-tv-android` | 电视版三种架构 APK 和 SHA256 |
-| `hongguojian-android` / `zhenguojian-android` | 手机版三种架构 APK 和 SHA256 |
+| `zhenguojian-tv-android` | 电视版「真果TV」三种架构 APK 和 SHA256 |
+| `zhenguojian-android` | 手机版三种架构 APK 和 SHA256 |
 
 Android 正式发布使用同一签名并递增构建号，在仓库 Secrets 配置：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`。未配置时生成 debug 签名预览包。
 
