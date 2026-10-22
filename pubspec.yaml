@@ -1,5 +1,5 @@
 name: duanju_app
-description: 独立运行的多端短剧应用
+description: 真果TV —— Android TV 短剧应用（基于 guoapp 改造，遥控器全流程可用）
 publish_to: none
 version: 0.2.64+71
 
