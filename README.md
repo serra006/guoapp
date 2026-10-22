@@ -14,8 +14,8 @@
 
 | 版本 | 应用名 | 包名 | 站源 |
 | --- | --- | --- | --- |
-| 单源版 | 红果鉴 TV | `com.duanju.duanju_app.tv` | 仅红果 |
-| 多源版 | 真果鉴 TV | `com.duanju.zhenguojian.tv` | 红果、韩小圈、鬼片、青空，以及黄豆、剧果、野果、帝果、黄果视频、黄果 AI、黄果旧版 |
+| 单源版 | 真果TV | `com.duanju.duanju_app.tv` | 仅红果 |
+| 多源版 | 真果TV 多源版 | `com.duanju.zhenguojian.tv` | 红果、韩小圈、鬼片、青空，以及黄豆、剧果、野果、帝果、黄果视频、黄果 AI、黄果旧版 |
 
 - 两个版本 **包名独立、可同时安装**，桌面各有一个图标，数据互不影响。
 - 默认可见站源（红果、韩小圈、鬼片、青空）无需密码；其余站源默认隐藏，在站源管理中通过密码锁解锁后显示。
@@ -35,8 +35,8 @@
 
 | 编译方式 | 应用名 | 站源 |
 | --- | --- | --- |
-| 默认 | 红果鉴 TV | 仅红果 |
-| 加 `--all-sources` | 真果鉴 TV | 红果 + 其余全部站源 |
+| 默认 | 真果TV | 仅红果 |
+| 加 `--all-sources` | 真果TV 多源版 | 红果 + 其余全部站源 |
 
 ## 使用
 
@@ -96,8 +96,8 @@
 Flutter `3.47.4`、Dart `3.12+`、Go `1.24.1+`、Python `3.10+`。Android 需要 JDK 17、SDK 36、NDK `28.2.13676358`。
 
 ~~~sh
-python3 scripts/build_android.py --flavor tv                  # 红果鉴 TV
-python3 scripts/build_android.py --flavor tv --all-sources    # 真果鉴 TV
+python3 scripts/build_android.py --flavor tv                  # 真果TV（单源）
+python3 scripts/build_android.py --flavor tv --all-sources    # 真果TV 多源版
 python3 scripts/build_android.py --flavor tv --abi arm64-v8a
 python3 scripts/build_android.py --flavor tv --cn-mirrors     # 国内镜像
 ~~~

@@ -7,7 +7,7 @@
 | 项 | 手机版（flavor `phone`） | 电视版（flavor `tv`） |
 | --- | --- | --- |
 | 包名 | `com.duanju.duanju_app` | `com.duanju.duanju_app.tv` |
-| 应用名 | 红果鉴 / 真果鉴 | 红果鉴 TV / 真果鉴 TV |
+| 应用名 | 红果鉴 / 真果鉴 | 真果TV / 真果TV 多源版 |
 | versionName | 0.2.64 | 0.2.64-tv |
 | 桌面入口 | 手机桌面 | 仅电视桌面（LEANBACK_LAUNCHER） |
 | 数据 | 独立 | 独立（可两版并存） |
@@ -23,8 +23,8 @@
 构建命令：
 
 ```sh
-python scripts/build_android.py --flavor tv              # 红果鉴 TV
-python scripts/build_android.py --flavor tv --all-sources  # 真果鉴 TV
+python scripts/build_android.py --flavor tv              # 真果TV（单源）
+python scripts/build_android.py --flavor tv --all-sources  # 真果TV 多源版
 python scripts/build_android.py                          # 手机版（默认 phone，行为不变）
 ```
 

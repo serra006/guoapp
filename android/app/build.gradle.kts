@@ -53,7 +53,7 @@ android {
             dimension = "platform"
             applicationId = if (allSources) "com.duanju.zhenguojian.tv" else "com.duanju.duanju_app.tv"
             versionNameSuffix = "-tv"
-            manifestPlaceholders["appLabel"] = if (allSources) "真果鉴 TV" else "红果鉴 TV"
+            manifestPlaceholders["appLabel"] = if (allSources) "真果TV 多源版" else "真果TV"
             manifestPlaceholders["appBanner"] = if (allSources) "@drawable/tv_banner_all_sources" else "@drawable/tv_banner"
         }
     }
