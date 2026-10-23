@@ -33,8 +33,8 @@
 | --- | --- | --- |
 | 真果TV | `com.duanju.zhenguo.tv` | 红果、韩小圈、鬼片、青空，以及黄豆、剧果、野果、帝果、黄果视频、黄果 AI、黄果旧版 |
 
-- 电视端只发这一个应用，全部站源已内置，不需要再选版本。
-- 默认可见站源（红果、韩小圈、鬼片、青空）无需密码；其余站点默认隐藏，在站源管理中通过密码解锁后显示。
+- 电视端只发布这一个应用，全部站源已内置，不需要再选版本。
+- 默认可见站源（红果、韩小圈、鬼片、青空）无需密码；其余站源默认隐藏，在站源管理中通过密码锁解锁后显示。
 - 包名与历史上的「红果鉴 TV」（`com.duanju.duanju_app.tv`）、「真果鉴 TV」（`com.duanju.zhenguojian.tv`）都不同，**三者可以同时安装、互不覆盖**；装好后旧版要不要卸载由你决定。
 - 因为是新包名，**旧版的追剧记录、搜索历史不会带过来**。
 
@@ -77,11 +77,11 @@
 | 帝果 | 网页分类、目录、详情及分集 | 站源在线分页搜索 |
 | 黄果视频 / 黄果 AI / 黄果旧版 | 列表、分类、详情及分集 | 筛选已加载短剧 |
 
-站源可用性、清晰度和区域限制取决于网站与网络；应用不解除网站 VIP 或其他授权限制。
+站源可用性、清晰度和区域限制取决于源站及网络；应用不解除源站 VIP 或其他授权限制。
 
 ### 网络与资源设置
 
-管理员从「设置与备份 → 网络与资源」选择自动、直连或手动代理，手动地址支持 HTTP、HTTPS、SOCKS5 / SOCKS5h。代理地址默认遮蔽、不进入备份；设备内播放服务始终绕过代理。自动模式采取系统静态代理与排除列表，恢复前台及每 30 秒更新；代理不会关闭 TLS 校验。
+管理员从「设置与备份 → 网络与资源」选择自动、直连或手动代理，手动地址支持 HTTP、HTTPS、SOCKS5 / SOCKS5h。代理地址默认遮蔽、不进入备份；设备内播放服务始终绕过代理。自动模式读取系统静态代理与排除列表，恢复前台及每 30 秒更新；代理不会关闭 TLS 校验。
 
 目录请求并发可设 1–6、间隔 0–5000 毫秒（默认 3 / 250ms）；下载并发默认 2、可设 1–6。
 
@@ -96,7 +96,7 @@
 | 平台 | 说明 |
 | --- | --- |
 | Android TV（主线） | 三架构 APK（arm64-v8a / armeabi-v7a / x86_64），按电视 CPU 选择；已装同名包可覆盖升级，数据保留 |
-| Android 手机 / 平板 | 仍保留手机版构建（包名不带 .tv），非本次主线 |
+| Android 手机 / 平板 | 仍保留手机版构建（包名不带 `.tv`），非本次主线 |
 | Windows / iOS | 源码保留相关工程，未随电视版验收 |
 
 - 电视安装：U 盘拷入 APK，用电视自带的文件管理器安装。注意部分电视会自动清理下载目录里的 APK，建议装完即删或直接 U 盘安装。
@@ -107,11 +107,11 @@
 
 Flutter `3.47.4`、Dart `3.12+`、Go `1.24.1+`、Python `3.10+`。Android 需要 JDK 17、SDK 36、NDK `28.2.13676358`。
 
-```sh
+~~~sh
 python3 scripts/build_android.py --flavor tv                  # 真果TV（电视版，固定全站源）
 python3 scripts/build_android.py --flavor tv --abi arm64-v8a
 python3 scripts/build_android.py --flavor tv --cn-mirrors     # 国内镜像
-```
+~~~
 
 手机上调试电视版：`flutter run --flavor tv --dart-define=TV_BUILD=true`（需先 `python3 scripts/build_native.py --platform android --abi <架构>` 编译核心）。
 
@@ -128,16 +128,16 @@ Android 正式发布使用同一签名并递增构建号，在仓库 Secrets 配
 
 本地不入库的 `android/key.properties`：
 
-```properties
+~~~properties
 storeFile=/absolute/path/zhenguojian-release.jks
 storePassword=你的密码
 keyAlias=zhenguojian
 keyPassword=你的密码
-```
+~~~
 
 ## 开发约定
 
-站源是 Go 原生 provider（`native/core/provider_*.go`），不是运行期加载的脚本。新增站源需接入：`provider_huangguo.go`（常量 / 白名单 / 来源规范化 / 分集接口）、`provider_media.go`（baseURL / host 反查 / 播放分派）、`app_categories.go`、`app_cover_metadata.go`、`app_runtime.go`（目录 / 搜索 / 详情分流 + 空页放行），并在 `lib/models.dart` 登记 `SourceSite`。
+站源是 Go 原生 provider（`native/core/provider_*.go`），不是运行期加载的脚本。新增站源需接入：`provider_huangguo.go`（常量 / 白名单 / 来源规范化 / 分集接口）、`provider_media.go`（baseURL / host 反查 / 播放分派）、`app_categories.go`、`app_cover_metadata.go`、`app_runtime.go`（目录 / 搜索 / 详情分派 + 空页放行），并在 `lib/models.dart` 登记 `SourceSite`。
 
 电视端注意：
 
@@ -157,5 +157,4 @@ keyPassword=你的密码
 
 ## 来源与免责声明
 
-本项目源码来自网上开源的 **guoapp**（原作者：鱼佬），在 `0.2.64+71` 基础上做了电视端适配与修复。仅用于个人学习与技术研究，**不保证可用性，随时可能停止维护**。所有内容版权归原站所有，本项目不存储任何视频资源，也不解除源站的 VIP 或其他授权
-限制。
+本项目源码来自网上开源的 **guoapp**（原作者：鱼佬），在 `0.2.64+71` 基础上做了电视端适配与修复。仅用于个人学习与技术研究，**不保证可用性，随时可能停止维护**。所有内容版权归原站所有，本项目不存储任何视频资源，也不解除源站的 VIP 或其他授权限制。
