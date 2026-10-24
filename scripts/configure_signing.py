@@ -23,7 +23,9 @@ if properties_file.exists():
 
 names = ['ANDROID_KEYSTORE_BASE64', 'ANDROID_KEYSTORE_PASSWORD',
          'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD']
-values = [os.environ.get(name, '') for name in names]
+# Secret 值统一去首尾空白：从 GitHub 网页端复制粘贴时极易带入换行或
+# 空格，不去除会报「keystore password was incorrect」这类难定位的失败。
+values = [os.environ.get(name, '').strip() for name in names]
 if not any(values):
     print('未配置签名 Secrets 且无预置签名：生成预览 APK。')
     raise SystemExit(0)

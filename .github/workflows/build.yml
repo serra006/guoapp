@@ -126,7 +126,7 @@ jobs:
             output2=$("$JAVA_HOME/bin/keytool" -J-Duser.language=en -J-Duser.country=US \
               -list -v -keystore "$store" -storepass "$trimmed" 2>&1) || true
             if ! printf '%s' "$output2" | grep -qiE "password was incorrect|invalid|integrity"; then
-              echo "::error::ANDROID_KEYSTORE_PASSWORD 的首尾含空白字符（复制粘贴常见问题）。请删除该 Secret 重新粘贴（不要带换行/空格），或改用去空白后的值。"
+              echo "::warning::ANDROID_KEYSTORE_PASSWORD 首尾含空白字符（复制粘贴常见问题）。configure_signing.py 已自动去空白，本次不受影响；建议更新该 Secret 时去掉首尾换行/空格。"
               storepass="$trimmed"
               output="$output2"
             fi
