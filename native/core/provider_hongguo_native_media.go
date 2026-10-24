@@ -16,14 +16,54 @@ func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoI
 	if !hongguoNumericID.MatchString(videoID) {
 		return providerMedia{}, errors.New("红果视频 ID 无效")
 	}
-	payload := map[string]any{
+	var firstErr error
+	// 取流入口一：multi_video_model/preload/v1/（批量）。红果 2026-10 起陆续停供
+	// /novel/player/video_model/v1/ 与 /novel/player/multi_video_model/v1/
+	// （表现为 HTTP 200 + 空体），preload 是社区实测最后可用的取流入口，配方参照
+	// onedrama ADR 0015。硬性要求：biz_param.video_platform=1024——照抄详情接口的 3
+	// 会被判「参数错误」，实测只有 1024 被收；mixed_video_id_map 的键 1004 = 短剧。
+	// 这两个常量只是入口要求，不是画质档位。响应是批量的：data[vid].video_model。
+	preload := map[string]any{
+		"biz_param": map[string]any{
+			"detail_page_version": 0, "device_level": 3, "disable_digg_stat": false,
+			"need_all_video_definition": true, "need_mp4_align": false,
+			"use_os_player": false, "use_server_dns": false, "video_platform": 1024,
+		},
+		"mixed_video_id_map": map[string]any{"1004": []string{videoID}},
+	}
+	if result, err := downloader.hongguoAppRequest(ctx, http.MethodPost, "/novel/player/multi_video_model/preload/v1/", nil, preload); err == nil {
+		if media, mediaErr := hongguoAppMediaFromPreload(result, videoID); mediaErr == nil {
+			return media, nil
+		} else if firstErr == nil {
+			firstErr = mediaErr
+		}
+	} else if firstErr == nil {
+		firstErr = err
+	}
+	// 取流入口二：旧的单集入口。红果会来回开合接口——video_detail 当天就随完整签名
+	// 从停供变为可用，media 类入口也可能单独重开。两个入口都预埋，任一恢复即自动接上。
+	legacy := map[string]any{
 		"video_id": videoID, "content_type": 1,
 		"biz_param": map[string]any{"need_all_video_definition": true, "video_platform": 3},
 	}
-	result, err := downloader.hongguoAppRequest(ctx, http.MethodPost, "/novel/player/video_model/v1/", nil, payload)
-	if err != nil {
-		return providerMedia{}, err
+	if result, err := downloader.hongguoAppRequest(ctx, http.MethodPost, "/novel/player/video_model/v1/", nil, legacy); err == nil {
+		if media, mediaErr := hongguoAppMediaFromResult(result); mediaErr == nil {
+			return media, nil
+		} else if firstErr == nil {
+			firstErr = mediaErr
+		}
+	} else if firstErr == nil {
+		firstErr = err
 	}
+	if firstErr == nil {
+		firstErr = errors.New("红果 App 未返回该视频的播放信息")
+	}
+	return providerMedia{}, firstErr
+}
+
+// hongguoAppMediaFromResult 解析旧单集入口的响应：data.video_model 可能是对象，
+// 也可能是一条 JSON 字符串。
+func hongguoAppMediaFromResult(result map[string]any) (providerMedia, error) {
 	data := nestedMap(result, "data")
 	model, _ := data["video_model"].(map[string]any)
 	if encoded, ok := data["video_model"].(string); ok {
@@ -32,6 +72,28 @@ func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoI
 		if err := decoder.Decode(&model); err != nil {
 			return providerMedia{}, errors.New("红果 App 播放信息格式异常")
 		}
+	}
+	if len(model) == 0 {
+		return providerMedia{}, errors.New("红果 App 未返回该视频的播放信息")
+	}
+	return selectHongguoAppMedia(model)
+}
+
+// hongguoAppMediaFromPreload 从批量取流响应里挑出本次请求的那个 vid 的 video_model。
+// 只认请求的 vid，不退回「data 里唯一的那一项」——批量响应里那一项可能是别的集，
+// 张冠李戴比报错糟得多（同详情腿核对 series_id 的口径）。
+func hongguoAppMediaFromPreload(result map[string]any, videoID string) (providerMedia, error) {
+	entry, _ := nestedMap(result, "data")[videoID].(map[string]any)
+	model, _ := entry["video_model"].(map[string]any)
+	if encoded, ok := entry["video_model"].(string); ok {
+		decoder := json.NewDecoder(strings.NewReader(encoded))
+		decoder.UseNumber()
+		if err := decoder.Decode(&model); err != nil {
+			return providerMedia{}, errors.New("红果 App 播放信息格式异常")
+		}
+	}
+	if len(model) == 0 {
+		return providerMedia{}, errors.New("红果 App 未返回该视频的播放信息")
 	}
 	return selectHongguoAppMedia(model)
 }

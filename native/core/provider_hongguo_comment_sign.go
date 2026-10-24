@@ -56,7 +56,6 @@ func signHongguoCommentRequest(request *http.Request, nonce hongguoCommentNonce,
 	request.Header.Set("X-Gorgon", hex.EncodeToString(append([]byte{0x84, 4, head2, head3, 0, 0}, seed...)))
 	request.Header.Set("X-Khronos", strconv.FormatUint(uint64(stamp), 10))
 	request.Header.Set("X-SS-Req-Ticket", strconv.FormatInt(now.UnixMilli(), 10))
-	request.Header.Set("X-SS-STUB", "")
 	request.Header.Set("X-Argus", hongguoCommentArgus(query, stamp, nonce))
 	request.Header.Set("X-Ladon", hongguoCommentLadon(request.URL.Query().Get("aid"), stamp, nonce[2:6]))
 }

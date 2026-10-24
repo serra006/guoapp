@@ -60,3 +60,27 @@ python scripts/build_android.py               # 手机版（默认 phone，全�
 - TV 全局 10-foot 字号缩放（建议 `textScaler.linear(1.35)`）。
 - `RemoteGrid` 行末右键吞键导致 footer「加载更多」不可达。
 - rail ↔ 内容网格焦点串联依赖遍历顺序。
+
+## 五、0.2.65+72 红果取数修复（2026-10-24）
+
+背景：红果 2026-10 收紧 App 风控，「目录能看、不能播放」。逐项实测结论：
+
+| 接口 | 旧签名（仅 X-Gorgon） | 完整三签名（Gorgon+Argus+Ladon） |
+| --- | --- | --- |
+| `video_detail/v1/`（剧集详情） | 200 空体 | **63906 字节，46 集齐全** |
+| `category/landpage/v/`（目录） | 200 空体 | **64244 字节，18 行 + 分页游标** |
+| `commentapi/comment/list`（弹幕） | — | 正常（原已使用） |
+| `video_model/v1/`、`multi_video_model/preload/v1/`（取流） | 200 空体 | 200 空体（官方停供） |
+
+改动：
+
+1. **全接口统一完整三签名**（`native/core/provider_hongguo_app.go`）：目录/详情/弹幕都走 `signHongguoCommentRequest`；不再发送 `X-SS-STUB`（实测空响应与带 STUB 无差别）。删除旧版 `signHongguoRequest`（`provider_hongguo_sign.go` 仅保留设备号生成）。目录与详情从「网页兜底」升级为 App 接口直取（播放量/时长/封面更全）。
+2. **预埋两个取流入口**（`provider_hongguo_native_media.go`）：先打 onedrama ADR 0015 配方的 `multi_video_model/preload/v1/`（`video_platform=1024` + `mixed_video_id_map{"1004":[vid]}`，只认请求的 vid），失败再回退旧 `video_model/v1/`。当前两入口均停供，接口重开即自动恢复，无需再发版。
+3. **本地播放代理 4 项修复**（移植自上游 PR #2，保留本仓既有的「session.key 播放列表误判」与「红果 m3u8 重定向转透传」修复）：
+   - Range 兑现：上游忽略 Range 返 200 全文件时，代理跳过前缀并补 206/Content-Range（修复 seek 后解析错位）；
+   - 会话回收：淘汰只回收从未送出数据的会话（预加载/重试类），正在观看的一集不再被误踢成 410；
+   - HLS 判定只认 URL 路径后缀，CDN 直链路径带 hls/m3u8 字样不再被误判；
+   - Range 请求强制 `Accept-Encoding: identity`，响应头写入后立即 Flush（规避 Media3 8 秒连接超时）；类型确定的响应不再 Peek 阻塞。
+4. **移除误提交的签名文件**：`android/key.properties`、`android/duanju_release.keystore`、`android/app/duanju_release.keystore` 曾被提交进这个公开仓库。本次从版本库移除（本机文件保留、已被 .gitignore 覆盖）。这也是 10-23 构建失败的根因——CI 的 `configure_signing.py` 优先使用仓库里的旧 key.properties，签出旧证书，与仓库变量 `ANDROID_CERT_SHA256`（新证书）不符；移除后 CI 改走签名 Secrets。**旧 keystore 已公开暴露，视为泄露，建议轮换。**
+
+验证状态：签名链路用一次性 Python 探针实测（全新设备号、单发、20 秒间隔，2026-10-24）；Go 单测 `app_danmaku_test.go` 的旧断言（普通请求不得带 Argus/Ladon）已按新契约更新；本机无 Go 工具链，`go test -race` 由 CI 执行。

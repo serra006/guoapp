@@ -31,6 +31,11 @@ func mediaRequestHeaders(request *http.Request, referer string) {
 	if origin, err := url.Parse(referer); err == nil && origin.Host != "" {
 		request.Header.Set("Origin", origin.Scheme+"://"+origin.Host)
 	}
+	// Range 请求必须拿未压缩响应：CDN 若对区间请求做 gzip，Content-Length 与
+	// Range 语义错乱，播放器 seek 后会解析错位。
+	if strings.HasPrefix(strings.ToLower(request.Header.Get("Range")), "bytes=") {
+		request.Header.Set("Accept-Encoding", "identity")
+	}
 }
 
 func (d *Downloader) isHuangguoVideoURL(address *url.URL) bool {
