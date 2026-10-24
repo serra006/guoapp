@@ -19,7 +19,7 @@ void main() {
     final store = testStore(await SharedPreferences.getInstance());
     expect(appSlug, allSourcesEnabled ? 'zhenguojian' : 'hongguojian');
     // 默认只显示红果、韩小圈、鬼片网与青空次元，其余站源需要密码解锁。
-    expect(store.sources.length, allSourcesEnabled ? 4 : 1);
+    expect(store.sources.length, allSourcesEnabled ? 5 : 1);
     expect(
       SourceSite.values.any((source) => source.id == 'dsd'),
       allSourcesEnabled,
@@ -31,7 +31,7 @@ void main() {
     expect(store.source, 'hongguo');
     await store.enableSourceGate('666666');
     expect(store.sourcesUnlocked, isTrue);
-    expect(store.sources.length, allSourcesEnabled ? 11 : 1);
+    expect(store.sources.length, allSourcesEnabled ? 12 : 1);
     expect(store.allowsSource('dsd'), allSourcesEnabled);
     store.dispose();
   });
