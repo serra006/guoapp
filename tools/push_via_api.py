@@ -34,25 +34,46 @@ def token():
 
 
 TOKEN = token()
-opener = urllib.request.build_opener(
-    urllib.request.ProxyHandler({"http": PROXY, "https": PROXY})
-)
+
+# 传输通道按顺序尝试：直连 → 系统代理 20808 → WorkBuddy 内置代理 58366。
+# 三个都可能单独失效（实测 58366 常挂、20808 会间歇黑洞），全部失败才报错。
+TRANSPORTS = [
+    ("direct", {}),
+    ("proxy20808", {"http": "http://127.0.0.1:20808", "https": "http://127.0.0.1:20808"}),
+    ("proxy58366", {"http": "http://127.0.0.1:58366", "https": "http://127.0.0.1:58366"}),
+]
+_openers = [
+    (name, urllib.request.build_opener(urllib.request.ProxyHandler(proxies)))
+    for name, proxies in TRANSPORTS
+]
+_active = {"name": None, "opener": None}
 
 
 def call(method, path, payload=None):
     data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(
-        API + path, data=data, method=method
-    )
-    req.add_header("Authorization", "Bearer " + TOKEN)
-    req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("X-GitHub-Api-Version", "2022-11-28")
-    req.add_header("User-Agent", "curl/8.5.0")
-    if data:
-        req.add_header("Content-Type", "application/json")
-    with opener.open(req, timeout=60) as r:
-        body = r.read().decode()
-    return json.loads(body) if body else {}
+    last = None
+    candidates = (
+        [( _active["name"], _active["opener"])] if _active["opener"] else []
+    ) + [pair for pair in _openers if pair[0] != _active["name"]]
+    for name, op in candidates:
+        req = urllib.request.Request(API + path, data=data, method=method)
+        req.add_header("Authorization", "Bearer " + TOKEN)
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("X-GitHub-Api-Version", "2022-11-28")
+        req.add_header("User-Agent", "curl/8.5.0")
+        if data:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with op.open(req, timeout=60) as r:
+                body = r.read().decode()
+            if _active["name"] != name:
+                print(f"[transport] {name}")
+                _active["name"], _active["opener"] = name, op
+            return json.loads(body) if body else {}
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            print(f"[transport] {name} 失败: {type(exc).__name__}: {exc}")
+    raise SystemExit(f"所有传输通道都失败: {last}")
 
 
 def changed_files(base_sha):
@@ -148,8 +169,12 @@ def main():
     )
     print("分支已更新")
 
-    # 让本地与远程对齐，避免下次 diff 基准错位
-    git("update-ref", f"refs/remotes/origin/{BRANCH}", commit["sha"])
+    # 本地没有这个 commit 对象（是 API 造的），update-ref 会失败——忽略即可。
+    # 网络恢复后 `git fetch origin` 会把这些对象拉下来并对齐。
+    try:
+        git("update-ref", f"refs/remotes/origin/{BRANCH}", commit["sha"])
+    except subprocess.CalledProcessError:
+        print("（本地缺少远程 commit 对象，跳过 origin 引用更新）")
     print(f'REMOTE_HEAD={commit["sha"]}')
 
 
