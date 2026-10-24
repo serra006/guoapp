@@ -59,17 +59,23 @@ def changed_files(base_sha):
     """用工作区未提交改动作为推送集合。
 
     远程 commit 是 API 造的，本地没有该对象，`git diff <远程sha> HEAD` 会失败，
-    所以改成读 `git status`：只处理当前未提交/未跟踪的文件。
+    所以改成读 `git status -z`：只处理当前未提交/未跟踪的文件。
+    注意用 -z（NUL 分隔）——普通模式下首行的前导空格会被 stdout.strip() 吃掉，
+    导致路径少一个字符（踩过：TV-CHANGES.md 变成 V-CHANGES.md）。
     """
-    out = git("status", "--porcelain", "-uall")
+    out = subprocess.run(
+        ["git", "status", "--porcelain", "-z", "-uall"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
     rows = []
-    for line in out.splitlines():
-        if not line.strip():
+    for item in out.split("\0"):
+        if len(item) < 4:
             continue
-        status = line[:2].strip()
-        path = line[3:].strip().strip('"')
-        if " -> " in path:
-            path = path.split(" -> ")[-1]
+        status = item[:2].strip()
+        path = item[3:]
         if status.startswith("D"):
             rows.append(("D", path, None))
         else:

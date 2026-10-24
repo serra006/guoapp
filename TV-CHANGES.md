@@ -185,3 +185,37 @@ python scripts/build_android.py               # 手机版（默认 phone，全�
 - 新增 `native/core/provider_hongguo_player_sign.go`（162 行）：播放签名（X-Gorgon / X-Argus / X-Ladon），移植自上游 Xanerix/guoapp 0.2.78+88 的 `fix: 红果播放签名补全字段`
 - `provider_hongguo_app.go`：非弹幕请求改走播放签名，弹幕仍走弹幕签名；非弹幕分支不再预生成弹幕 nonce
 - 本地校验：`go build ./...`、`go vet ./core/` 通过；`go test ./core/` 中 `TestNativeCatalogMetadataSaveExcludesInFlightCursor` 在本改动之前即已失败（已用 `git checkout` 回退验证基线，非本次回归）
+
+## 十、TV 端 UI 重设计 v1（v0.2.68+75，2026-10-25）
+
+设计稿与规范见 `design/tv-redesign-v1.html`、`design/design-contract.md`（1920×1080 等比，
+浏览器里可用 ←→↑↓ / Enter / Esc 等价遥控器验证）。本轮把设计稿落到真机代码。
+
+### 改动清单
+
+| 文件 | 变化 |
+| --- | --- |
+| `lib/design_tokens.dart`（新增） | 色板 `TvColor`、密度与焦点参数 `TvSpace`、字阶 `TvText`，以及反相/提亮/降亮三个 `ColorFilter` |
+| `lib/app_theme.dart` | 深色画布 `#101114 → #08090C`，品牌 `#FF664F → #FF6B4A`，surface 全系换成 `#14161D/#1B1E27/#242833`；TV 端 `mode()` 强制深色；InputDecoration 圆角 16 → 12 |
+| `lib/app_layout.dart` | `televisionTheme` 焦点改为「获焦整块反白」（白底黑字+反相），按钮改 pill；popup/dialog 表面去 tint |
+| `lib/remote_widgets.dart` | `RemoteTarget` 焦点三重可辨：`AnimatedScale(1.065)` + 3px 白环 + `ColorFilter` 提亮 1.1 + 珊瑚外发光；新增 `invertOnFocus` / `focusScale` / `glow`。`RemoteButton` 改 pill，新增 `pill` / `dense` |
+| `lib/widgets.dart` | `DramaTile` 在 TV 下缩略图改 **16:9 横版**（手机仍 2:3）；白环只包画面不包标题；`extentFor` 同步算入焦点内边距；`dramaGridDelegate` TV 下按 300 宽分列（3–7 列） |
+| `lib/home_screen.dart` | 左侧导航改**浮动玻璃栏**：收起 118 / 任一子项获焦展开 300，渐变材质 + 发丝边框，选中项珊瑚 tint，替换原 164px 纯按钮列 |
+| `lib/player_controls.dart` | 进度条 `trackHeight 3→8`、圆钮 `6→11`、热区 `14→22`、行高 `28→36`；音量竖条同样规格；进度/圆钮改品牌珊瑚 |
+
+### 刻意没做的（避免布局风险）
+
+- **字号全部不动**。设计契约按 960dp 折算（如卡片标题 11sp），但 TV 各家 density 不一
+  （960dp 与 1920dp 都存在），硬改字号会在某类机型上突然变小。本轮只调字重、行高、明度。
+- **详情页 / 播放页 OSD 结构未拆**。设计稿的详情页是「海报 + 信息列 + 选集贴底」新结构，
+  涉及 `detail_screen.dart`（912 行），留待 v2 单独做，避免与皮肤层改动混在一起难以回滚。
+- **浅色主题保留在代码里但 TV 不可达**（`AppTheme.mode(television: true)` 直接返回深色）。
+
+### 推送方式变更（本轮遇到的环境问题）
+
+`git push` 到 `github.com` 被 TLS 阻断（`schannel: failed to receive handshake` /
+`OpenSSL: unexpected eof`），但 `api.github.com` 经内置代理 `127.0.0.1:58366` 正常。
+因此新增 `tools/push_via_api.py`：用 Git Data API 手工构造 blob → tree → commit → ref 更新，
+绕过 `github.com`。配套 `tools/ci_status.py`、`tools/wait_ci.py` 查运行状态。
+副作用：远程 commit 对象本地不存在，本地 `main` 与 `origin/main` 在哈希层面分叉（内容一致），
+网络恢复后 `git fetch` 即可对齐。
