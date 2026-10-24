@@ -303,7 +303,11 @@ class DuanjuApp extends StatelessWidget {
     localizationsDelegates: GlobalMaterialLocalizations.delegates,
     theme: AppTheme.light,
     darkTheme: AppTheme.dark,
-    themeMode: AppTheme.mode(store?.themeMode ?? 'system'),
+    // TV 端固定深色（客厅暗光 + 系统惯例），忽略浅色偏好。
+    themeMode: AppTheme.mode(
+      store?.themeMode ?? 'system',
+      television: television,
+    ),
     builder: (context, child) {
       final mode = store?.displayMode ?? 'auto';
       final tv = mode == 'television' || mode == 'auto' && television;

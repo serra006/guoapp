@@ -4,9 +4,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'design_tokens.dart';
+
 export 'app_build.dart';
 
-const appVersion = '0.2.64';
+const appVersion = '0.2.68';
 
 DateTime? _lastExitIntentAt;
 ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _lastExitSnackBar;
@@ -52,25 +54,39 @@ void requestExitConfirmation(BuildContext context) {
 
 ThemeData televisionTheme(ThemeData theme) {
   final colors = theme.colorScheme;
+  final dark = theme.brightness == Brightness.dark;
+  // 焦点语言：获焦整块反白（深色主题下白底黑字），3m 外辨识度最高。
+  // 不做描边高亮——描边在客厅视距下几乎无效。
   final focusSide = WidgetStateProperty.resolveWith<BorderSide?>(
     (states) => states.contains(WidgetState.focused)
-        ? BorderSide(color: colors.primary, width: 3)
-        : null,
+        ? BorderSide(color: dark ? TvColor.focusRing : colors.primary, width: 3)
+        : BorderSide.none,
   );
   final focusBackground = WidgetStateProperty.resolveWith<Color?>(
-    (states) =>
-        states.contains(WidgetState.focused) ? colors.primaryContainer : null,
+    (states) => states.contains(WidgetState.focused)
+        ? (dark ? TvColor.focusRing : colors.primaryContainer)
+        : null,
+  );
+  final focusForeground = WidgetStateProperty.resolveWith<Color?>(
+    (states) => states.contains(WidgetState.focused)
+        ? (dark ? const Color(0xFF0B0C10) : colors.onSurface)
+        : null,
   );
   final button = ButtonStyle(
     side: focusSide,
-    minimumSize: const WidgetStatePropertyAll(Size(52, 48)),
-    textStyle: const WidgetStatePropertyAll(TextStyle(fontSize: 17)),
+    backgroundColor: focusBackground,
+    foregroundColor: focusForeground,
+    shape: const WidgetStatePropertyAll(StadiumBorder()),
+    minimumSize: const WidgetStatePropertyAll(Size(56, 50)),
+    textStyle: const WidgetStatePropertyAll(
+      TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+    ),
   );
   // 10-foot 视距下默认焦点 overlay 几乎不可辨：
   // Flutter 3.47 的 ListTileThemeData 已无 focusColor/hoverColor/overlayColor，
   // 焦点高亮统一由下方 ThemeData.focusColor 全局兜底
   return theme.copyWith(
-    focusColor: colors.primaryContainer,
+    focusColor: dark ? TvColor.brandDim : colors.primaryContainer,
     radioTheme: RadioThemeData(fillColor: WidgetStateProperty.resolveWith(
       (states) => states.contains(WidgetState.focused)
           ? colors.primary
@@ -96,10 +112,20 @@ ThemeData televisionTheme(ThemeData theme) {
       side: BorderSide(color: colors.primary, width: 2),
     ),
     popupMenuTheme: theme.popupMenuTheme.copyWith(
-      color: colors.surface,
-      elevation: 8,
+      color: dark ? TvColor.surface : colors.surface,
+      surfaceTintColor: Colors.transparent,
+      elevation: 16,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(TvSpace.cardRadius),
+        side: BorderSide(color: TvColor.hair),
+      ),
     ),
     dialogTheme: theme.dialogTheme.copyWith(
+      backgroundColor: dark ? TvColor.surface : null,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(TvSpace.cardRadius),
+      ),
       titleTextStyle: (theme.dialogTheme.titleTextStyle ??
               theme.textTheme.titleLarge)
           ?.copyWith(fontSize: 26),
@@ -115,7 +141,7 @@ ThemeData televisionTheme(ThemeData theme) {
     ),
     inputDecorationTheme: theme.inputDecorationTheme.copyWith(
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(TvSpace.cardRadius),
         borderSide: BorderSide(color: colors.primary, width: 3),
       ),
     ),

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'app_layout.dart';
+import 'design_tokens.dart';
 import 'lan_controller.dart';
 import 'player_interactions.dart';
 import 'widgets.dart';
@@ -501,11 +502,11 @@ class _PlayerControlsState extends State<PlayerControls> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 0, 8, 2),
       child: SizedBox(
-        height: 28,
+        height: 36,
         child: Row(
           children: [
             SizedBox(
-              width: 43,
+              width: 52,
               child: Text(
                 formatPosition(_seekValue ?? position),
                 style: timeStyle,
@@ -515,13 +516,17 @@ class _PlayerControlsState extends State<PlayerControls> {
             Expanded(
               child: SliderTheme(
                 data: SliderTheme.of(context).copyWith(
-                  trackHeight: 3,
-                  secondaryActiveTrackColor: Colors.white38,
+                  // TV 上 4px 以细看不清，进度条必须加粗到 8 且圆钮 22。
+                  trackHeight: 8,
+                  activeTrackColor: TvColor.brand,
+                  inactiveTrackColor: Colors.white24,
+                  secondaryActiveTrackColor: Colors.white54,
+                  thumbColor: TvColor.brand,
                   thumbShape: const RoundSliderThumbShape(
-                    enabledThumbRadius: 6,
+                    enabledThumbRadius: 11,
                   ),
                   overlayShape: const RoundSliderOverlayShape(
-                    overlayRadius: 14,
+                    overlayRadius: 22,
                   ),
                 ),
                 child: Slider(
@@ -899,18 +904,21 @@ class _PlayerControlsState extends State<PlayerControls> {
                             ),
                           ),
                           SizedBox(
-                            width: 44,
-                            height: 112,
+                            width: 52,
+                            height: 128,
                             child: RotatedBox(
                               quarterTurns: -1,
                               child: SliderTheme(
                                 data: SliderTheme.of(context).copyWith(
-                                  trackHeight: 3,
+                                  trackHeight: 8,
+                                  activeTrackColor: TvColor.brand,
+                                  inactiveTrackColor: Colors.white24,
+                                  thumbColor: TvColor.brand,
                                   thumbShape: const RoundSliderThumbShape(
-                                    enabledThumbRadius: 6,
+                                    enabledThumbRadius: 11,
                                   ),
                                   overlayShape: const RoundSliderOverlayShape(
-                                    overlayRadius: 14,
+                                    overlayRadius: 22,
                                   ),
                                 ),
                                 child: Slider(

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import 'core_bridge.dart';
 import 'app_layout.dart';
+import 'design_tokens.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
 
@@ -92,7 +93,7 @@ class DramaCover extends StatelessWidget {
     super.key,
     required this.drama,
     required this.repository,
-    this.radius = 14,
+    this.radius = TvSpace.cardRadius,
   });
   final Drama drama;
   final AppRepository repository;
@@ -102,6 +103,8 @@ class DramaCover extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    // 横版卡画幅更矮，底部压暗收窄一点，别把画面吃掉一半。
+    final tv = AppLayout.isTelevision(context);
     final placeholder = Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -140,7 +143,7 @@ class DramaCover extends StatelessWidget {
                     end: Alignment.bottomCenter,
                     colors: [
                       Colors.transparent,
-                      Colors.black.withValues(alpha: .78),
+                      Colors.black.withValues(alpha: tv ? .58 : .78),
                     ],
                   ),
                 ),
@@ -358,72 +361,82 @@ class DramaTile extends StatelessWidget {
       ).scale(AppLayout.isTelevision(context) ? 14 : 12) *
       1.3;
 
-  static double extentFor(BuildContext context, double width) =>
-      (width * 1.5 + 13 + titleHeight(context) + subtitleHeight(context))
-          .ceilToDouble();
+  static double extentFor(BuildContext context, double width) {
+    // TV 用 16:9 横版（一屏可放 6 张且远距可辨），手机沿用 2:3 竖版海报。
+    final tv = AppLayout.isTelevision(context);
+    final aspect = tv ? TvSpace.cardAspect : TvSpace.posterAspect;
+    // TV 焦点白环占 3px 内边距（四周共 6），要算进去否则底部被网格裁掉。
+    final ring = tv ? 6.0 : 0.0;
+    return (width / aspect +
+            13 +
+            ring +
+            titleHeight(context) +
+            subtitleHeight(context))
+        .ceilToDouble();
+  }
 
   @override
   Widget build(BuildContext context) {
     final television = AppLayout.isTelevision(context);
-    final content = Column(
+    final poster = AspectRatio(
+      aspectRatio: television ? TvSpace.cardAspect : TvSpace.posterAspect,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          DramaCover(drama: drama, repository: repository),
+          if (badge != null && badge!.isNotEmpty)
+            Positioned(
+              left: 6,
+              right: 6,
+              bottom: 6,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: .72),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 4,
+                  ),
+                  child: Text(
+                    badge!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          if (actions != null && selected == null)
+            Positioned(top: 2, right: 2, child: actions!),
+          if (selected != null)
+            Positioned(
+              top: 6,
+              right: 6,
+              child: CircleAvatar(
+                radius: 16,
+                backgroundColor: selected!
+                    ? Theme.of(context).colorScheme.primary
+                    : Colors.black.withValues(alpha: .64),
+                child: Icon(
+                  selected! ? Icons.check_rounded : Icons.circle_outlined,
+                  size: 22,
+                  color: selected!
+                      ? Theme.of(context).colorScheme.onPrimary
+                      : Colors.white,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+    final textBlock = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        AspectRatio(
-          aspectRatio: 2 / 3,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              DramaCover(drama: drama, repository: repository),
-              if (badge != null && badge!.isNotEmpty)
-                Positioned(
-                  left: 6,
-                  right: 6,
-                  bottom: 6,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: .72),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 4,
-                      ),
-                      child: Text(
-                        badge!,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              if (actions != null && selected == null)
-                Positioned(top: 2, right: 2, child: actions!),
-              if (selected != null)
-                Positioned(
-                  top: 6,
-                  right: 6,
-                  child: CircleAvatar(
-                    radius: 16,
-                    backgroundColor: selected!
-                        ? Theme.of(context).colorScheme.primary
-                        : Colors.black.withValues(alpha: .64),
-                    child: Icon(
-                      selected! ? Icons.check_rounded : Icons.circle_outlined,
-                      size: 22,
-                      color: selected!
-                          ? Theme.of(context).colorScheme.onPrimary
-                          : Colors.white,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
         const SizedBox(height: 9),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 2),
@@ -461,23 +474,33 @@ class DramaTile extends StatelessWidget {
       ],
     );
     if (television) {
+      // 白环只包画面，不包标题——否则焦点框会把文字一起圈进去，看着像块板子。
       // 触屏长按（onLongPress 多选）在遥控器上不可达，TV 替代路径：
       // 1. 遥控器菜单键(contextMenu) → onMore 菜单，内含"多选下载"入口
       // 2. 标题栏「多选下载」按钮(select-catalog-dramas) → 进入选择模式后卡片点按即选择
       // 3. 详情页含收藏/状态/下载全部功能，作为最终兜底
-      return CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.contextMenu): ?onMore,
-        },
-        child: RemoteTarget(
-          focusNode: focusNode,
-          onFocus: onFocus,
-          onPressed: onTap,
-          selected: selected ?? false,
-          label:
-              '${drama.title}，${drama.episodes}集${badge == null ? '' : '，$badge'}',
-          child: content,
-        ),
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CallbackShortcuts(
+            bindings: {
+              const SingleActivator(LogicalKeyboardKey.contextMenu): ?onMore,
+            },
+            child: RemoteTarget(
+              focusNode: focusNode,
+              onFocus: onFocus,
+              onPressed: onTap,
+              selected: selected ?? false,
+              radius: TvSpace.cardRadius,
+              borderWidth: 3,
+              padding: const EdgeInsets.all(3),
+              label:
+                  '${drama.title}，${drama.episodes}集${badge == null ? '' : '，$badge'}',
+              child: poster,
+            ),
+          ),
+          textBlock,
+        ],
       );
     }
     return Semantics(
@@ -488,8 +511,11 @@ class DramaTile extends StatelessWidget {
         onTap: onTap,
         onLongPress: onLongPress ?? onMore,
         onSecondaryTap: onMore,
-        borderRadius: BorderRadius.circular(14),
-        child: content,
+        borderRadius: BorderRadius.circular(TvSpace.cardRadius),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [poster, textBlock],
+        ),
       ),
     );
   }
@@ -555,12 +581,17 @@ class StatusPanel extends StatelessWidget {
 }
 
 SliverGridDelegate dramaGridDelegate(BuildContext context, double width) {
-  final columns = width < 600 ? 3 : (width / 180).floor().clamp(4, 9);
-  final spacing = width < 600 ? 10.0 : 18.0;
+  final television = AppLayout.isTelevision(context);
+  // TV 横版卡需要更宽的单元，否则一屏 9 列全是邮票。
+  final unit = television ? TvSpace.cardWidth : 180.0;
+  final columns = width < 600
+      ? 3
+      : (width / unit).floor().clamp(television ? 3 : 4, television ? 7 : 9);
+  final spacing = width < 600 ? 10.0 : (television ? 22.0 : 18.0);
   final tileWidth = (width - (columns - 1) * spacing) / columns;
   return SliverGridDelegateWithFixedCrossAxisCount(
     crossAxisCount: columns,
-    mainAxisSpacing: 22,
+    mainAxisSpacing: television ? 26 : 22,
     crossAxisSpacing: spacing,
     mainAxisExtent: DramaTile.extentFor(context, tileWidth),
   );

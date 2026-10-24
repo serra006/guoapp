@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 
+import 'design_tokens.dart';
 import 'search_input.dart';
 import 'package:flutter/services.dart';
 
@@ -18,6 +19,9 @@ class RemoteTarget extends StatefulWidget {
     this.padding = const EdgeInsets.all(4),
     this.borderWidth = 3,
     this.outlined = false,
+    this.invertOnFocus = false,
+    this.focusScale,
+    this.glow = true,
   });
   final Widget child;
   final VoidCallback? onPressed;
@@ -31,6 +35,16 @@ class RemoteTarget extends StatefulWidget {
   final double borderWidth;
   final bool outlined;
 
+  /// 获焦时整体反白（白底黑字黑图标）。用于按钮与左侧导航项——
+  /// 3m 外反白的辨识度远高于描边高亮。卡片不要用它（海报会变负片）。
+  final bool invertOnFocus;
+
+  /// 获焦放大倍数，null 时取设计契约默认值。
+  final double? focusScale;
+
+  /// 是否带珊瑚外发光。纯文字行内元素可关掉，避免大面积泛红。
+  final bool glow;
+
   @override
   State<RemoteTarget> createState() => _RemoteTargetState();
 }
@@ -39,75 +53,124 @@ class _RemoteTargetState extends State<RemoteTarget> {
   bool _focused = false;
 
   @override
-  Widget build(BuildContext context) => FocusableActionDetector(
-    focusNode: widget.focusNode,
-    autofocus: widget.autofocus,
-    enabled: widget.onPressed != null,
-    actions: {
-      ActivateIntent: CallbackAction<ActivateIntent>(
-        onInvoke: (_) {
-          widget.onPressed?.call();
-          return null;
-        },
-      ),
-    },
-    onFocusChange: (focused) {
-      if (mounted) {
-        setState(() => _focused = focused);
-      }
-      if (focused) {
-        widget.onFocus?.call();
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _focused) {
-            Scrollable.ensureVisible(
-              context,
-              alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
-            );
-          }
-        });
-      }
-    },
-    child: Semantics(
-      button: true,
-      enabled: widget.onPressed != null,
-      focused: _focused,
-      label: widget.label,
-      child: MouseRegion(
-        cursor: widget.onPressed == null
-            ? SystemMouseCursors.basic
-            : SystemMouseCursors.click,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: widget.onPressed,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 120),
-            padding: widget.padding,
-            decoration: BoxDecoration(
-              color: widget.selected
-                  ? Theme.of(context).colorScheme.primaryContainer
-                  : _focused && widget.outlined
-                  ? Theme.of(context).colorScheme.surfaceContainerHighest
-                  : _focused
-                  ? Theme.of(context).colorScheme.primaryContainer
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(widget.radius),
-              border: Border.all(
-                color: _focused
-                    ? Theme.of(context).colorScheme.primary
-                    : widget.selected
-                    ? Theme.of(context).colorScheme.primary
-                    : widget.outlined
-                    ? Theme.of(context).colorScheme.outlineVariant
-                    : Colors.transparent,
-                width: widget.borderWidth,
-              ),
-            ),
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final radius = BorderRadius.circular(widget.radius);
+    final scale =
+        widget.focusScale ??
+        (widget.invertOnFocus ? TvSpace.buttonFocusScale : TvSpace.focusScale);
+
+    // 焦点必须同时满足三重可辨：缩放 + 白环 + 提亮。客厅远距离单一手段不够。
+    final Widget body;
+    if (widget.invertOnFocus && _focused) {
+      // 白底 + 反相内容 = 白底黑字，且不需要再叠白环（环在深底上才可见）。
+      body = DecoratedBox(
+        decoration: BoxDecoration(
+          color: TvColor.focusRing,
+          borderRadius: radius,
+          boxShadow: widget.glow ? tvFocusShadows() : null,
+        ),
+        child: Padding(
+          padding: widget.padding,
+          child: ColorFiltered(
+            colorFilter: tvInvertFilter,
             child: ExcludeFocus(child: widget.child),
           ),
         ),
+      );
+    } else {
+      final Color background;
+      final Color border;
+      if (widget.selected) {
+        background = colors.primaryContainer;
+        border = colors.primary;
+      } else if (widget.outlined) {
+        background = _focused
+            ? TvColor.surface3
+            : Colors.white.withValues(alpha: .06);
+        border = _focused ? TvColor.focusRing : TvColor.hair;
+      } else {
+        background = _focused
+            ? Colors.white.withValues(alpha: .10)
+            : Colors.transparent;
+        border = _focused ? TvColor.focusRing : Colors.transparent;
+      }
+      body = AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.easeOutCubic,
+        padding: widget.padding,
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: radius,
+          border: Border.all(
+            color: border,
+            // 宽度恒定，避免获焦/失焦时卡片尺寸跳变（会连带整行抖动）。
+            width: widget.borderWidth,
+          ),
+          boxShadow: _focused && widget.glow ? tvFocusShadows() : null,
+        ),
+        child: ExcludeFocus(
+          child: _focused && !widget.invertOnFocus
+              ? ColorFiltered(
+                  colorFilter: tvBrightenFilter,
+                  child: widget.child,
+                )
+              : widget.child,
+        ),
+      );
+    }
+
+    return FocusableActionDetector(
+      focusNode: widget.focusNode,
+      autofocus: widget.autofocus,
+      enabled: widget.onPressed != null,
+      actions: {
+        ActivateIntent: CallbackAction<ActivateIntent>(
+          onInvoke: (_) {
+            widget.onPressed?.call();
+            return null;
+          },
+        ),
+      },
+      onFocusChange: (focused) {
+        if (mounted) {
+          setState(() => _focused = focused);
+        }
+        if (focused) {
+          widget.onFocus?.call();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _focused) {
+              Scrollable.ensureVisible(
+                context,
+                alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+              );
+            }
+          });
+        }
+      },
+      child: Semantics(
+        button: true,
+        enabled: widget.onPressed != null,
+        focused: _focused,
+        label: widget.label,
+        child: MouseRegion(
+          cursor: widget.onPressed == null
+              ? SystemMouseCursors.basic
+              : SystemMouseCursors.click,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onPressed,
+            child: AnimatedScale(
+              scale: _focused ? scale : 1,
+              duration: const Duration(milliseconds: 150),
+              curve: Curves.easeOutCubic,
+              child: body,
+            ),
+          ),
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class RemoteButton extends StatelessWidget {
@@ -119,6 +182,8 @@ class RemoteButton extends StatelessWidget {
     this.selected = false,
     this.autofocus = false,
     this.focusNode,
+    this.pill = true,
+    this.dense = false,
   });
   final String label;
   final VoidCallback? onPressed;
@@ -127,6 +192,12 @@ class RemoteButton extends StatelessWidget {
   final bool autofocus;
   final FocusNode? focusNode;
 
+  /// TV 主按钮用 pill 造型；导航项也用 pill（获焦整块反白）。
+  final bool pill;
+
+  /// 紧凑模式：导航展开/收起时的图标 + 小字。
+  final bool dense;
+
   @override
   Widget build(BuildContext context) => RemoteTarget(
     onPressed: onPressed,
@@ -134,23 +205,34 @@ class RemoteButton extends StatelessWidget {
     autofocus: autofocus,
     focusNode: focusNode,
     label: label,
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (icon != null) ...[Icon(icon, size: 22), const SizedBox(width: 8)],
-          Text(
+    radius: pill ? TvSpace.pill : TvSpace.cardRadius,
+    invertOnFocus: true,
+    padding: EdgeInsets.symmetric(
+      horizontal: dense ? 12 : 16,
+      vertical: dense ? 9 : 12,
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (icon != null) ...[
+          Icon(icon, size: dense ? 20 : 22),
+          const SizedBox(width: 8),
+        ],
+        Flexible(
+          child: Text(
             label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              fontSize: 17,
+              fontSize: dense ? 15 : 17,
+              fontWeight: FontWeight.w600,
               color: onPressed == null
                   ? Theme.of(context).disabledColor
                   : Theme.of(context).colorScheme.onSurface,
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     ),
   );
 }

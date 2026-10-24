@@ -11,6 +11,7 @@ import 'catalog_filters.dart';
 import 'catalog_browser.dart';
 import 'catalog_sort.dart';
 import 'catalog_sort_sheet.dart';
+import 'design_tokens.dart';
 import 'recommendations_screen.dart';
 import 'rankings_screen.dart';
 import 'detail_screen.dart';
@@ -73,6 +74,9 @@ class _HomeScreenState extends State<HomeScreen> {
   final _recentTaps = RepeatTapGate();
   String _sourceSignature = '';
   bool _catalogLoadScheduled = false;
+
+  /// 左侧导航是否展开（任一导航项获焦时展开到 300，否则收起到 118）。
+  bool _tvNavExpanded = false;
 
   List<SourceGroup> get _sourceGroups {
     final groups = SourceGroup.fromSources(widget.store.sources);
@@ -811,6 +815,100 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   @override
+  /// TV 左侧浮动玻璃导航：收起 118 / 任一子项获焦展开到 300。
+  /// 材质用渐变 + 发丝边框，不用 Material 的 surface——否则整块会发灰、抢海报。
+  Widget _tvNavRail() {
+    final entries = <(IconData, String, int)>[
+      (Icons.explore_rounded, '发现', 0),
+      (Icons.bookmark_rounded, '追剧', 1),
+      (Icons.history_rounded, '最近观看', 2),
+      if (widget.store.canDownload) (Icons.download_rounded, '下载', 3),
+    ];
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onFocusChange: (focused) {
+        if (focused != _tvNavExpanded) {
+          setState(() => _tvNavExpanded = focused);
+        }
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        width: _tvNavExpanded ? 300 : 118,
+        margin: const EdgeInsets.fromLTRB(14, 22, 8, 18),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xEB0C0E13), Color(0xA608090C)],
+          ),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: TvColor.hair),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final entry in entries) ...[
+              _tvNavItem(
+                icon: entry.$1,
+                text: entry.$2,
+                tab: entry.$3,
+              ),
+              const SizedBox(height: 10),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tvNavItem({
+    required IconData icon,
+    required String text,
+    required int tab,
+  }) {
+    final selected = _tab == tab;
+    final tint = selected ? TvColor.brand : TvColor.text2;
+    return RemoteTarget(
+      key: ValueKey('tv-nav-$tab'),
+      selected: selected,
+      autofocus: tab == 0,
+      label: text,
+      radius: TvSpace.pill,
+      focusScale: 1.04,
+      padding: EdgeInsets.symmetric(
+        horizontal: _tvNavExpanded ? 16 : 0,
+        vertical: 11,
+      ),
+      onPressed: () => _onNavSelected(tab),
+      child: Row(
+        mainAxisAlignment: _tvNavExpanded
+            ? MainAxisAlignment.start
+            : MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 22, color: tint),
+          if (_tvNavExpanded) ...[
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: tint,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.store,
     builder: (context, _) => LayoutBuilder(
@@ -1027,36 +1125,7 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Row(
               children: [
                 if (television) ...[
-                  SizedBox(
-                    width: 164,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 24, 8, 12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          for (final entry in [
-                            (Icons.explore_rounded, '发现'),
-                            (Icons.bookmark_rounded, '追剧'),
-                            (Icons.history_rounded, '最近观看'),
-                            if (widget.store.canDownload)
-                              (Icons.download_rounded, '下载'),
-                          ].indexed)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 14),
-                              child: RemoteButton(
-                                key: ValueKey('tv-nav-${entry.$1}'),
-                                label: entry.$2.$2,
-                                icon: entry.$2.$1,
-                                selected: _tab == entry.$1,
-                                autofocus: entry.$1 == 0,
-                                onPressed: () => _onNavSelected(entry.$1),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const VerticalDivider(width: 1),
+                  _tvNavRail(),
                 ] else if (desktop) ...[
                   NavigationRail(
                     selectedIndex: _tab,
