@@ -115,3 +115,31 @@ python scripts/build_android.py               # 手机版（默认 phone，全�
 | video_model/v1/ 旧版（video_platform=1024） | — | **0 字节** |
 
 全部返回 HTTP 200 + 空 body，与账号无关，系红果官方服务端内容级断流。hongguo-web（sgccdev，10-06 停更）的同款路径同样已断——行业性封锁，非本 App 问题。取流双入口（preload + legacy）保持预埋，接口重开即自动恢复，无需再发版。
+
+## 八、内建七猫短剧源（v0.2.66+73，2026-10-25）
+
+红果官方内容级断流、登录态实测无法破解（见第七节），因此在 App 内直接新增一个**可用站源**：七猫短剧（qmplaylet）。不依赖红果任何接口，HLS 直链走公网 CDN。
+
+### 接口与签名（Python 探针 + Go 实现双向验证）
+
+- 目录：`https://api-store.qmplaylet.com/api/v1/playlet/index?tag_id=<tag>&playlet_privacy=1&operation=1&sign=md5("operation=1playlet_privacy=1tag_id=" + tag + KEYS)`
+- 详情：`https://api-read.qmplaylet.com/player/api/v1/playlet/info?playlet_id=<id>&sign=md5("playlet_id=" + id + KEYS)`
+- 请求头：`qm-params` = 设备 JSON 的 base64 经 64 字符表逐字符替换；`sign` = md5(`AUTHORIZATION=app-version=10001application-id=com.duoduo.readchannel=unknownis-white=net-env=5platform=androidqm-params=<qm>reg=<KEYS>`)；另需 net-env/reg/channel/is-white/platform/application-id/authorization/app-version、UA `okhttp/3.12.11`
+- `KEYS = d3dGiJc651gSQ8w1`，字符表见 `native/core/provider_qimao.go` 的 `qimaoCharMap`
+
+### 实测结论（本机 Go 直连，非 Mock）
+
+| 环节 | 结果 |
+| --- | --- |
+| 分类 | 18 个（新剧 / 都市情感 / 逆袭 / 虐恋 / 复仇 / 豪门总裁 / 古装 / 重生 / 甜宠 …，源自接口 `tag_items` 149 项里的前 18 个） |
+| 目录 | tag 0「全部」66 部；单分类 15~19 部；**接口不支持分页**（加 page/offset 一律返回 0 部）→ 第 2 页返回空、hasMore=false |
+| 详情 | `data` 即剧集信息，`play_list` 逐集 video_id/video_url/duration/sort |
+| 取流 | `resolveQimaoMedia` → HLS 拉取成功（3778 字节播放列表，时长 2m3s），CDN 为 `cdn-vod-playlet.wtzw.com` |
+| 搜索 | 官方搜索接口已停用（各变体均返回 `{"list":null}`）→ 改为「推荐页标题匹配 + 命中分类名整类返回」，实测「总裁」命中 22 部 |
+
+### 代码改动
+
+- 新增 `native/core/provider_qimao.go`（约 600 行）：签名、目录/分类/详情/搜索/取流，仿 `provider_huangju.go` 的错误处理与限流写法
+- 接线：`provider_huangguo.go`（源常量 + 白名单 + 别名 `qimao/qmplaylet/qmplaylet.com` + `GetHuangguoChapters`）、`app_runtime.go`（搜索分支 + 目录 switch + 空结果兜底 + 详情 switch + 集数合并）、`app_categories.go`（分类校验 + 分类拉取）、`provider_media.go`（baseURL + 取流分发）、`app_cover_metadata.go`（封面补齐）
+- `lib/models.dart`：新增 `SourceSite('qimao', '七猫', '短剧 · 分类 · 搜索')`，放入 `primaryValues`（默认可见，无需解锁密码），并加入 `pagedSearch`
+- 本地校验：`go build ./...`、`go vet ./core/`、`go test -run "TestNativeCategories|TestSource|TestProvider"` 全部通过（本机新装 Go 1.24.6 于 `E:/6/tools/go`）
