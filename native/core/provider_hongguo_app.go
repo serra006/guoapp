@@ -175,14 +175,18 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 		request.Header.Set("X-XS-From-Web", "0")
 		request.Header.Set("Sdk-Version", "2")
 		comment, _ := ctx.Value(hongguoCommentKey{}).(bool)
-		// 红果自 2026-10 起对 App 全接口（目录/详情/弹幕）都要求完整三签名
-		// X-Gorgon + X-Argus + X-Ladon；仅带 X-Gorgon 的旧签名一律返回
-		// HTTP 200 + 0 字节。弹幕与非弹幕走同一套签名，区别仅是弹幕额外带
-		// Comment-Source / Server-Channel 两个业务头。不发送 X-SS-STUB：
-		// 实测空响应与带 STUB 无差别，缺 STUB 时三签名中的 Argus 已含 body 摘要。
-		commentNonce, err := newHongguoCommentNonce()
-		if err != nil {
-			return nil, errors.New("无法准备红果请求签名")
+		// 红果自 2026-10 起对 App 全接口（目录/详情/取流）都要求完整三签名
+		// X-Gorgon + X-Argus + X-Ladon，且**播放/目录与弹幕用的是两套不同签名**：
+		// 弹幕签名（provider_hongguo_comment_sign.go）的 Argus 缺 device_id、
+		// 机型环境等字段，打到 video_detail / landpage / video_model 一律返回
+		// HTTP 200 + 0 字节；必须改用播放签名（provider_hongguo_player_sign.go）。
+		// 该签名会对 body 计算 X-SS-STUB 并写入 Argus 的 body 摘要。
+		var commentNonce hongguoCommentNonce
+		if comment {
+			commentNonce, err = newHongguoCommentNonce()
+			if err != nil {
+				return nil, errors.New("无法准备红果请求签名")
+			}
 		}
 		if comment {
 			request.Header.Set("Comment-Source", "601")
@@ -195,9 +199,12 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 			now := time.Now()
 			query.Set("_rticket", strconv.FormatInt(now.UnixMilli(), 10))
 			prepared.URL.RawQuery = query.Encode()
-			// 目录/详情/弹幕统一使用完整三签名；实测（2026-10-24）旧版
-			// 仅 X-Gorgon 的签名对 video_detail 与 landpage 均返回 0 字节。
-			signHongguoCommentRequest(prepared, commentNonce, now)
+			// 弹幕走弹幕签名（aid=3019 那套），其余（目录/详情/取流）走播放签名。
+			if comment {
+				signHongguoCommentRequest(prepared, commentNonce, now)
+			} else {
+				signHongguoPlayerRequest(prepared, body, now)
+			}
 		})
 		if err != nil {
 			lastErr = err

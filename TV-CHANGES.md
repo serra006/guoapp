@@ -143,3 +143,45 @@ python scripts/build_android.py               # 手机版（默认 phone，全�
 - 接线：`provider_huangguo.go`（源常量 + 白名单 + 别名 `qimao/qmplaylet/qmplaylet.com` + `GetHuangguoChapters`）、`app_runtime.go`（搜索分支 + 目录 switch + 空结果兜底 + 详情 switch + 集数合并）、`app_categories.go`（分类校验 + 分类拉取）、`provider_media.go`（baseURL + 取流分发）、`app_cover_metadata.go`（封面补齐）
 - `lib/models.dart`：新增 `SourceSite('qimao', '七猫', '短剧 · 分类 · 搜索')`，放入 `primaryValues`（默认可见，无需解锁密码），并加入 `pagedSearch`
 - 本地校验：`go build ./...`、`go vet ./core/`、`go test -run "TestNativeCategories|TestSource|TestProvider"` 全部通过（本机新装 Go 1.24.6 于 `E:/6/tools/go`）
+
+## 九、红果播放真正修好：移植播放专用签名（v0.2.67+74，2026-10-25）
+
+第七节曾判定「登录态无效、红果服务端内容级断流」。**该结论是错的**——补上正确的请求签名后，红果四个接口全部恢复返回真实数据，无需登录。
+
+### 根因
+
+红果自 2026-10 起对 App 接口校验 X-Gorgon + X-Argus + X-Ladon 三签名，且**播放/目录与弹幕用的是两套不同签名**：
+
+| 差异点 | 弹幕签名（本仓库原有） | 播放签名（本次新增） |
+| --- | --- | --- |
+| Argus 字段 4（aid） | `3019` | `8662` |
+| Argus 字段 5（device_id） | **缺** | 取 query 的 `device_id` |
+| Argus 字段 6 | `1611921764` | `1611921764` |
+| Argus 字段 7（版本） | `6.8.1.32` | `7.3.5.32` |
+| Argus 字段 11 / 16 | **缺** | `0` / 空字节 |
+| Argus 字段 23（机型环境） | **缺** | `{1:"25053RT47C",2:"16",3:"update_64",4:2147483648}` |
+| Argus 字段 25 | **缺** | `2` |
+| Argus 字段 3 掩码 | 原值 | `& 0x7fffffff` |
+| body 摘要（字段 13） | `SM3(16 个 0)` | `SM3(MD5(body))`，并写 `X-SS-STUB` |
+| 字段 15 计数器 | 嵌套 `{2,3,4}=1388734` | `{1:1,2:1,3:1,7:3348294860}` |
+| X-Gorgon 混淆 | RC4 式 + `{0,1,7,4}` | 固定密钥异或 + `{0,6,11,28}` |
+| X-Ladon 载荷 | `ts-1611921764-3019` | `ts-1611921764-<aid>` |
+
+原实现把所有请求（含目录/详情/取流）都按弹幕签名发，Argus 缺 device_id 与机型环境，网关一律回 HTTP 200 + 0 字节——这正是第七节误判为「断流」的现象。
+
+### 实测（本机 Go 直连真实网关，非 Mock）
+
+| 入口 | 结果 |
+| --- | --- |
+| `/novel/player/video_detail/v1/` | 200，63902 字节，code=0 |
+| `/reading/distribution/category/landpage/v/` | 200，53191 字节，has_more=true |
+| `/novel/player/multi_video_model/preload/v1/` | 200，23488 字节，video_model status=10 |
+| `/novel/player/video_model/v1/` | 200，23466 字节，status=10 |
+| `resolveHongguoAppMedia` 生产链路 | 拿到直链，画质 1080，时长 1m48s |
+| 直链 Range 拉取 | **HTTP 206，读到真实 MP4 头 `ftypisom`** |
+
+### 代码改动
+
+- 新增 `native/core/provider_hongguo_player_sign.go`（162 行）：播放签名（X-Gorgon / X-Argus / X-Ladon），移植自上游 Xanerix/guoapp 0.2.78+88 的 `fix: 红果播放签名补全字段`
+- `provider_hongguo_app.go`：非弹幕请求改走播放签名，弹幕仍走弹幕签名；非弹幕分支不再预生成弹幕 nonce
+- 本地校验：`go build ./...`、`go vet ./core/` 通过；`go test ./core/` 中 `TestNativeCatalogMetadataSaveExcludesInFlightCursor` 在本改动之前即已失败（已用 `git checkout` 回退验证基线，非本次回归）
