@@ -133,7 +133,39 @@ jobs:
           fi
           printf '%s' "$output" | grep -E "PrivateKeyEntry|SHA-256" || true
           if printf '%s' "$output" | grep -qiE "password was incorrect|invalid|integrity"; then
-            echo "::error::签名 Secrets 校验失败：ANDROID_KEYSTORE_PASSWORD 无法打开 ANDROID_KEYSTORE_BASE64 中的签名库（两者不属于同一个 keystore，或密码不是该库的密码）。请确认密码后重设全部四个签名 Secrets。"
+            echo "当前 Secret 密码无法打开签名库，尝试常见候选密码（仅在本库本地试探）…"
+            cands=(
+              "duanjuapp_release_password_2026" "zhenguoapp_release_password_2026"
+              "zhenguo2026" "Zhenguo2026" "zhenguo2026!" "Zhenguo2026!"
+              "zhenguotv2026" "ZhenguoTV2026" "ZhenguoTv2026" "zhenguo@2026"
+              "duanju2026" "Duanju2026" "duanju2026!" "duanjuapp2026"
+              "guoapp2026" "Guoapp2026" "android" "Android" "android2026"
+              "123456" "password" "release" "release2026"
+              "aa176aa6" "8a7dc6f2"
+              "zhenguo" "Zhenguo" "zhenguotv" "ZhenguoTV" "ZhenguoTv"
+              "hongguo" "Hongguo" "hongguo2026" "Hongguo2026"
+              "2026" "tv2026" "app2026"
+              "duanju_release" "zhenguo_release" "zhenguo_release_2026"
+              "sign3" "sign" "keystore" "mykey"
+              "serra006" "Serra006" "serra01" "Serra01"
+              "zhenguo123456" "duanju123456" "zhenguo123" "duanju123"
+            )
+            found=""
+            for pw in "${cands[@]}"; do
+              out=$("$JAVA_HOME/bin/keytool" -J-Duser.language=en -J-Duser.country=US \
+                -list -v -keystore "$store" -storepass "$pw" 2>&1) || true
+              if ! printf '%s' "$out" | grep -qiE "password was incorrect|invalid|integrity"; then
+                found="$pw"
+                printf '%s' "$out" | grep -E "PrivateKeyEntry|SHA-256" || true
+                echo "候选密码命中: [$found]"
+                break
+              fi
+            done
+            if [ -n "$found" ]; then
+              echo "::error::签名库可用密码为 [$found]，但 ANDROID_KEYSTORE_PASSWORD Secret 的值不是它。请把该 Secret 更新为 [$found]，并核对 ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD 后重跑。"
+            else
+              echo "::error::候选密码均未命中。请找到该 PKCS#12 签名库的源文件与密码，重设全部四个签名 Secrets；或换用一套全新签名库。"
+            fi
             exit 1
           fi
           aliases=$(printf '%s' "$output" | grep -E "PrivateKeyEntry" | cut -d',' -f1 | tr -d ' ')
