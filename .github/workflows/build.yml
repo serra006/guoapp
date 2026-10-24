@@ -131,7 +131,7 @@ jobs:
               output="$output2"
             fi
           fi
-          printf '%s' "$output" | grep -E "PrivateKeyEntry|SHA-256" || true
+          printf '%s' "$output" | grep -E "Alias name|SHA256:" || true
           if printf '%s' "$output" | grep -qiE "password was incorrect|invalid|integrity"; then
             echo "当前 Secret 密码无法打开签名库，尝试常见候选密码（仅在本库本地试探）…"
             cands=(
@@ -156,7 +156,7 @@ jobs:
                 -list -v -keystore "$store" -storepass "$pw" 2>&1) || true
               if ! printf '%s' "$out" | grep -qiE "password was incorrect|invalid|integrity"; then
                 found="$pw"
-                printf '%s' "$out" | grep -E "PrivateKeyEntry|SHA-256" || true
+                printf '%s' "$out" | grep -E "Alias name|SHA256:" || true
                 echo "候选密码命中: [$found]"
                 break
               fi
@@ -168,7 +168,9 @@ jobs:
             fi
             exit 1
           fi
-          aliases=$(printf '%s' "$output" | grep -E "PrivateKeyEntry" | cut -d',' -f1 | tr -d ' ')
+          # keytool -list -v（英文 locale）的别名字段是 "Alias name: xxx" 行；
+          # "Entry type: PrivateKeyEntry" 是条目类型行，不能拿它当别名。
+          aliases=$(printf '%s' "$output" | grep -E "^Alias name:" | cut -d':' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
           if [ -z "$aliases" ]; then
             echo "::error::签名库中没有私钥条目（PrivateKeyEntry），请确认上传的是签名用的 keystore 而非仅含证书的文件。"
             exit 1
