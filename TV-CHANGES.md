@@ -84,3 +84,21 @@ python scripts/build_android.py               # 手机版（默认 phone，全�
 4. **移除误提交的签名文件**：`android/key.properties`、`android/duanju_release.keystore`、`android/app/duanju_release.keystore` 曾被提交进这个公开仓库。本次从版本库移除（本机文件保留、已被 .gitignore 覆盖）。这也是 10-23 构建失败的根因——CI 的 `configure_signing.py` 优先使用仓库里的旧 key.properties，签出旧证书，与仓库变量 `ANDROID_CERT_SHA256`（新证书）不符；移除后 CI 改走签名 Secrets。**旧 keystore 已公开暴露，视为泄露，建议轮换。**
 
 验证状态：签名链路用一次性 Python 探针实测（全新设备号、单发、20 秒间隔，2026-10-24）；Go 单测 `app_danmaku_test.go` 的旧断言（普通请求不得带 Argus/Ladon）已按新契约更新；本机无 Go 工具链，`go test -race` 由 CI 执行。
+
+## 六、签名 Secrets 修复与 CI 自检（2026-10-24 续）
+
+10-24 构建（81f11e2）失败于 `:app:packageTvRelease`：`KeytoolException: keystore password was incorrect`。代码侧无问题——`go test -race` 失败集与提交前（5a83d46）完全一致（6 个目录游标既有失败 + 同样 panic；workflow 对测试 `continue-on-error` 不阻塞出包），Flutter 测试 132/23 与 134/20 亦与既有一致，零新增失败。
+
+为定位 Secrets 问题，CI 增加「诊断签名 Secrets」步骤（构建前执行，失败即止，省 6 分钟编译）：
+
+- 打印签名库大小/格式魔数（JKS/PKCS#12）与证书 SHA-256 指纹；
+- 校验库密码、密钥密码、别名一致性；
+- 密码不符时自动重试「去首尾空白」值，并对 ~50 个常见候选密码本地试探（仅在该库上执行）。
+
+诊断结论（40065057020 / 40065689071 / 40066224453 三次运行）：
+
+- Secrets 中 `ANDROID_KEYSTORE_BASE64` 解出 **2786 字节 PKCS#12 签名库**（非截断、非本机任何现有库——本机旧 JKS 2640、sign3.p12 2658、sudoku.keystore 2718 均不符），应为轮换时上传的新库；
+- `ANDROID_KEYSTORE_PASSWORD` 原值与去空白值均无法打开该库，~50 个候选密码也未命中——**密码 Secret 的值不是该库的密码**；
+- 本机新备一套签名库 `E:/6/guoapp-signing/duanju_release_2026.keystore`（别名 `duanju`，库/密钥密码 `zhenguoapp_release_password_2026`，证书 SHA-256 `66e2913f8aed4e97ef679bb767a8a9cf9f04f45876a2a277f6c25961ed641075`，base64 见同目录 `keystore-base64.txt`）作为兜底；采用它需同步把仓库变量 `ANDROID_CERT_SHA256` 改为该指纹。
+
+待用户决策：A) 找到原 PKCS#12 源文件与密码，重设四个 Secret；B) 改用上述新签名库 + 更新证书变量。两者都需在 GitHub 网页端操作（当前 PAT 无 Secrets 读写权限）。
