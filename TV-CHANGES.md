@@ -99,6 +99,6 @@ python scripts/build_android.py               # 手机版（默认 phone，全�
 
 - Secrets 中 `ANDROID_KEYSTORE_BASE64` 解出 **2786 字节 PKCS#12 签名库**（非截断、非本机任何现有库——本机旧 JKS 2640、sign3.p12 2658、sudoku.keystore 2718 均不符），应为轮换时上传的新库；
 - `ANDROID_KEYSTORE_PASSWORD` 原值与去空白值均无法打开该库，~50 个候选密码也未命中——**密码 Secret 的值不是该库的密码**；
-- 本机新备一套签名库 `E:/6/guoapp-signing/duanju_release_2026.keystore`（别名 `duanju`，库/密钥密码 `zhenguoapp_release_password_2026`，证书 SHA-256 `66e2913f8aed4e97ef679bb767a8a9cf9f04f45876a2a277f6c25961ed641075`，base64 见同目录 `keystore-base64.txt`）作为兜底；采用它需同步把仓库变量 `ANDROID_CERT_SHA256` 改为该指纹。
+- 本机新备一套签名库 `E:/6/guoapp-signing/duanju_release_2026.keystore`（别名 `duanju`，证书 SHA-256 `f47732e85b889a1c3ac0c727fa79f9a5245315e8d56022b4df93f99e97e27adc`，base64 见同目录 `keystore-base64.txt`；**密码不写入仓库，经聊天单独交付**）作为兜底；采用它需同步把仓库变量 `ANDROID_CERT_SHA256` 改为该指纹。该 keystore 文件与密码是今后更新 App 的唯一凭据，请妥善备份，切勿提交进任何仓库。
 
-待用户决策：A) 找到原 PKCS#12 源文件与密码，重设四个 Secret；B) 改用上述新签名库 + 更新证书变量。两者都需在 GitHub 网页端操作（当前 PAT 无 Secrets 读写权限）。
+用户已决策（2026-10-24）：换用该新签名库。操作路径：GitHub 网页端 Settings → Secrets and variables → Actions，重设四个签名 Secret（ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD），并把仓库变量 ANDROID_CERT_SHA256 改为上述指纹，随后重跑 Build app packages。当前 PAT 无 Secrets 读写权限，网页操作需用户本人完成。
