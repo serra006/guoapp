@@ -1,0 +1,26 @@
+{
+  "sites": [
+    {
+      "key": "duanju_agg",
+      "name": "聚合短剧",
+      "type": 3,
+      "api": "https://cdn.jsdelivr.net/gh/serra006/guoapp@main/fongmi/duanju.js",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1,
+      "timeout": 30,
+      "style": { "type": "rect", "ratio": 1.33 }
+    },
+    {
+      "key": "duanju_agg_bak",
+      "name": "聚合短剧·备用",
+      "type": 3,
+      "api": "https://ghfast.top/https://raw.githubusercontent.com/serra006/guoapp/main/fongmi/duanju.js",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1,
+      "timeout": 30,
+      "style": { "type": "rect", "ratio": 1.33 }
+    }
+  ]
+}
