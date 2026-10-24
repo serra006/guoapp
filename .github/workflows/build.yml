@@ -111,11 +111,29 @@ jobs:
             exit 0
           fi
           echo "签名库: $store ($(stat -c%s "$store") 字节)"
+          magic=$(od -An -tx1 -N4 "$store" | tr -d ' \n')
+          case "$magic" in
+            feedfeed) echo "格式: JKS" ;;
+            3082*) echo "格式: PKCS#12" ;;
+            *) echo "格式: 未知 (magic=$magic)，可能不是标准签名库" ;;
+          esac
+          trimmed="${ANDROID_KEYSTORE_PASSWORD#"${ANDROID_KEYSTORE_PASSWORD%%[![:space:]]*}"}"
+          trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+          storepass="$ANDROID_KEYSTORE_PASSWORD"
           output=$("$JAVA_HOME/bin/keytool" -J-Duser.language=en -J-Duser.country=US \
-            -list -v -keystore "$store" -storepass "$ANDROID_KEYSTORE_PASSWORD" 2>&1) || true
-          printf '%s\n' "$output" | grep -E "PrivateKeyEntry|SHA-256" || true
+            -list -v -keystore "$store" -storepass "$storepass" 2>&1) || true
           if printf '%s' "$output" | grep -qiE "password was incorrect|invalid|integrity"; then
-            echo "::error::签名 Secrets 校验失败：ANDROID_KEYSTORE_PASSWORD 无法打开 ANDROID_KEYSTORE_BASE64 中的签名库（两者不属于同一个 keystore，或 base64 复制时被截断）。请用同一个 keystore 重新设置全部四个签名 Secrets。"
+            output2=$("$JAVA_HOME/bin/keytool" -J-Duser.language=en -J-Duser.country=US \
+              -list -v -keystore "$store" -storepass "$trimmed" 2>&1) || true
+            if ! printf '%s' "$output2" | grep -qiE "password was incorrect|invalid|integrity"; then
+              echo "::error::ANDROID_KEYSTORE_PASSWORD 的首尾含空白字符（复制粘贴常见问题）。请删除该 Secret 重新粘贴（不要带换行/空格），或改用去空白后的值。"
+              storepass="$trimmed"
+              output="$output2"
+            fi
+          fi
+          printf '%s' "$output" | grep -E "PrivateKeyEntry|SHA-256" || true
+          if printf '%s' "$output" | grep -qiE "password was incorrect|invalid|integrity"; then
+            echo "::error::签名 Secrets 校验失败：ANDROID_KEYSTORE_PASSWORD 无法打开 ANDROID_KEYSTORE_BASE64 中的签名库（两者不属于同一个 keystore，或密码不是该库的密码）。请确认密码后重设全部四个签名 Secrets。"
             exit 1
           fi
           aliases=$(printf '%s' "$output" | grep -E "PrivateKeyEntry" | cut -d',' -f1 | tr -d ' ')
@@ -125,11 +143,11 @@ jobs:
           fi
           for alias in $aliases; do
             if "$JAVA_HOME/bin/keytool" -J-Duser.language=en -certreq -alias "$alias" \
-                -keystore "$store" -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+                -keystore "$store" -storepass "$storepass" \
                 -keypass "$ANDROID_KEY_PASSWORD" >/dev/null 2>&1; then
               echo "别名 $alias: 库密码与密钥密码均校验通过"
             else
-              echo "::error::别名 $alias 校验失败：若库密码刚已通过，则 ANDROID_KEY_PASSWORD 不是该别名的密钥密码，或 ANDROID_KEY_ALIAS 与签名库中的别名不一致。"
+              echo "::error::别名 $alias 校验失败：库密码已通过，则 ANDROID_KEY_PASSWORD 不是该别名的密钥密码，或 ANDROID_KEY_ALIAS 与签名库中的别名不一致（当前 Secret 别名为: $ANDROID_KEY_ALIAS）。"
               exit 1
             fi
           done
