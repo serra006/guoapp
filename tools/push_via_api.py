@@ -1,92 +1,59 @@
-"""通过 GitHub Git Data API 推送本地提交（绕过 github.com 的 TLS 阻断，走 api.github.com）。
+"""通过 GitHub Git Data API 推送本地改动（绕过 github.com 的 TLS 阻断，走 api.github.com）。
 
-本机 git push 到 github.com 被 RST / TLS 中断，但 api.github.com 经内置代理可用，
+本机 `git push` 到 github.com 常被 RST / TLS 中断，但 api.github.com 通常可用，
 因此用 REST API 手工构造 blob → tree → commit → ref 更新。
+
+用法：
+    python tools/push_via_api.py                        # 推送工作区未提交的改动
+    python tools/push_via_api.py a.md b.png             # 只推指定路径（补推已提交文件）
+    python tools/push_via_api.py --message="docs: xxx"  # 覆盖 commit message
+    python tools/push_via_api.py --repo                    # 顺手改仓库简介与 topics
 """
 import base64
-import json
 import os
-import re
 import subprocess
 import sys
-import urllib.request
 
-ROOT = r"E:\6\guoapp"
-API = "https://api.github.com"
-PROXY = "http://127.0.0.1:58366"
-OWNER = "serra006"
-REPO = "guoapp"
+import gh_api as api
+
 BRANCH = "main"
+
+# 仓库简介与话题：改这里再跑 `--repo` 即可同步到 GitHub。
+DESCRIPTION = (
+    "真果TV · Android TV 短剧应用：10-foot 大屏重制界面，遥控器全流程，"
+    "焦点三重可辨；内置 12 个站源，解析与播放全部本地完成"
+)
+TOPICS = [
+    "android-tv",
+    "flutter",
+    "dart",
+    "leanback",
+    "tv",
+    "mpv",
+    "media-kit",
+    "short-drama",
+    "golang",
+    "offline",
+]
 
 
 def git(*args):
     return subprocess.run(
-        ["git", *args], cwd=ROOT, capture_output=True, text=True, check=True
+        ["git", *args], cwd=api.ROOT, capture_output=True, text=True, check=True
     ).stdout.strip()
 
 
-def token():
-    url = git("remote", "get-url", "origin")
-    m = re.search(r"https://[^:]+:([^@]+)@", url)
-    if not m:
-        raise SystemExit("remote url 里没有 token")
-    return m.group(1)
-
-
-TOKEN = token()
-
-# 传输通道按顺序尝试：直连 → 系统代理 20808 → WorkBuddy 内置代理 58366。
-# 三个都可能单独失效（实测 58366 常挂、20808 会间歇黑洞），全部失败才报错。
-TRANSPORTS = [
-    ("direct", {}),
-    ("proxy20808", {"http": "http://127.0.0.1:20808", "https": "http://127.0.0.1:20808"}),
-    ("proxy58366", {"http": "http://127.0.0.1:58366", "https": "http://127.0.0.1:58366"}),
-]
-_openers = [
-    (name, urllib.request.build_opener(urllib.request.ProxyHandler(proxies)))
-    for name, proxies in TRANSPORTS
-]
-_active = {"name": None, "opener": None}
-
-
-def call(method, path, payload=None):
-    data = json.dumps(payload).encode() if payload is not None else None
-    last = None
-    candidates = (
-        [( _active["name"], _active["opener"])] if _active["opener"] else []
-    ) + [pair for pair in _openers if pair[0] != _active["name"]]
-    for name, op in candidates:
-        req = urllib.request.Request(API + path, data=data, method=method)
-        req.add_header("Authorization", "Bearer " + TOKEN)
-        req.add_header("Accept", "application/vnd.github+json")
-        req.add_header("X-GitHub-Api-Version", "2022-11-28")
-        req.add_header("User-Agent", "curl/8.5.0")
-        if data:
-            req.add_header("Content-Type", "application/json")
-        try:
-            with op.open(req, timeout=60) as r:
-                body = r.read().decode()
-            if _active["name"] != name:
-                print(f"[transport] {name}")
-                _active["name"], _active["opener"] = name, op
-            return json.loads(body) if body else {}
-        except Exception as exc:  # noqa: BLE001
-            last = exc
-            print(f"[transport] {name} 失败: {type(exc).__name__}: {exc}")
-    raise SystemExit(f"所有传输通道都失败: {last}")
-
-
-def changed_files(base_sha):
+def changed_files():
     """用工作区未提交改动作为推送集合。
 
     远程 commit 是 API 造的，本地没有该对象，`git diff <远程sha> HEAD` 会失败，
     所以改成读 `git status -z`：只处理当前未提交/未跟踪的文件。
-    注意用 -z（NUL 分隔）——普通模式下首行的前导空格会被 stdout.strip() 吃掉，
+    注意必须用 -z（NUL 分隔）——普通模式下首行的前导空格会被 stdout.strip() 吃掉，
     导致路径少一个字符（踩过：TV-CHANGES.md 变成 V-CHANGES.md）。
     """
     out = subprocess.run(
         ["git", "status", "--porcelain", "-z", "-uall"],
-        cwd=ROOT,
+        cwd=api.ROOT,
         capture_output=True,
         text=True,
         check=True,
@@ -98,48 +65,57 @@ def changed_files(base_sha):
         status = item[:2].strip()
         path = item[3:]
         if status.startswith("D"):
-            rows.append(("D", path, None))
+            rows.append(("D", path))
         else:
-            rows.append(("A" if status in ("??", "A") else "M", path, path))
+            rows.append(("A" if status in ("??", "A") else "M", path))
     return rows
 
 
-def main():
-    remote_ref = call("GET", f"/repos/{OWNER}/{REPO}/git/ref/heads/{BRANCH}")
-    base_sha = remote_ref["object"]["sha"]
-    base_tree = call("GET", f"/repos/{OWNER}/{REPO}/git/commits/{base_sha}")["tree"][
-        "sha"
-    ]
-    print(f"远程 HEAD = {base_sha[:8]}  tree = {base_tree[:8]}")
+def set_repo_meta():
+    """更新仓库简介与话题。需要 token 具备 Administration: write。"""
+    result = api.patch(api.repo_path(), {"description": DESCRIPTION, "topics": TOPICS})
+    print(f"简介  = {result.get('description')}")
+    print(f"topics = {', '.join(result.get('topics') or [])}")
 
-    rows = changed_files(base_sha)
+
+def main():
+    paths = [a for a in sys.argv[1:] if not a.startswith("--")]
+    flags = [a for a in sys.argv[1:] if a.startswith("--")]
+    msg_override = next(
+        (a.split("=", 1)[1] for a in flags if a.startswith("--message=")), None
+    )
+
+    if "--repo" in flags:
+        set_repo_meta()
+        if not paths:
+            return
+
+    rows = [("A", p) for p in paths] if paths else changed_files()
     if not rows:
         print("没有差异，退出")
         return
-    print(f"待推送文件 {len(rows)} 个")
+
+    remote_ref = api.get(api.repo_path(f"/git/ref/heads/{BRANCH}"))
+    base_sha = remote_ref["object"]["sha"]
+    base_tree = api.get(api.repo_path(f"/git/commits/{base_sha}"))["tree"]["sha"]
+    print(f"远程 HEAD = {base_sha[:8]}  tree = {base_tree[:8]}")
+    print(f"待推送文件 {len(rows)} 个  [transport={api._state['name']}]")
 
     entries = []
-    for status, path, local in rows:
+    for status, path in rows:
         if status == "D":
             print(f"  D {path}")
-            entries.append(
-                {"path": path, "mode": "100644", "type": "blob", "sha": None}
-            )
+            entries.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
             continue
-        full = os.path.join(ROOT, path.replace("/", os.sep))
+        full = os.path.join(api.ROOT, path.replace("/", os.sep))
         if not os.path.isfile(full):
             print(f"  跳过（本地缺失）{path}")
             continue
-        if path.lower().endswith((".png", ".jpg", ".apk", ".zip")) or os.path.getsize(
-            full
-        ) > 1_000_000:
-            print(f"  跳过（大体积预览图）{path}")
-            continue
         with open(full, "rb") as f:
             raw = f.read()
-        blob = call(
-            "POST",
-            f"/repos/{OWNER}/{REPO}/git/blobs",
+        # 二进制（png/jpg）走同一套 base64 blob 接口，体积 >1MB 也照样推。
+        blob = api.post(
+            api.repo_path("/git/blobs"),
             {"content": base64.b64encode(raw).decode(), "encoding": "base64"},
         )
         print(f"  {status} {path}  {len(raw)}B -> {blob['sha'][:8]}")
@@ -147,24 +123,20 @@ def main():
             {"path": path, "mode": "100644", "type": "blob", "sha": blob["sha"]}
         )
 
-    tree = call(
-        "POST",
-        f"/repos/{OWNER}/{REPO}/git/trees",
-        {"base_tree": base_tree, "tree": entries},
+    tree = api.post(
+        api.repo_path("/git/trees"), {"base_tree": base_tree, "tree": entries}
     )
     print(f"新 tree = {tree['sha'][:8]}")
 
-    message = git("log", "-1", "--pretty=%B", "HEAD")
-    commit = call(
-        "POST",
-        f"/repos/{OWNER}/{REPO}/git/commits",
+    message = msg_override or git("log", "-1", "--pretty=%B", "HEAD")
+    commit = api.post(
+        api.repo_path("/git/commits"),
         {"message": message, "tree": tree["sha"], "parents": [base_sha]},
     )
     print(f"新 commit = {commit['sha'][:8]}")
 
-    call(
-        "PATCH",
-        f"/repos/{OWNER}/{REPO}/git/refs/heads/{BRANCH}",
+    api.patch(
+        api.repo_path(f"/git/refs/heads/{BRANCH}"),
         {"sha": commit["sha"], "force": False},
     )
     print("分支已更新")
