@@ -1,6 +1,17 @@
 {
   "sites": [
     {
+      "key": "duanju_qm",
+      "name": "七猫短剧",
+      "type": 3,
+      "api": "csp_duanju_qm",
+      "ext": "https://cdn.jsdelivr.net/gh/serra006/guoapp@main/fongmi/qm.js",
+      "searchable": 1,
+      "quickSearch": 1,
+      "timeout": 30,
+      "style": { "type": "rect", "ratio": 1.33 }
+    },
+    {
       "key": "duanju_agg",
       "name": "聚合短剧",
       "type": 3,
