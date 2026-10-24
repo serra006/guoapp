@@ -102,3 +102,16 @@ python scripts/build_android.py               # 手机版（默认 phone，全�
 - 本机新备一套签名库 `E:/6/guoapp-signing/duanju_release_2026.keystore`（别名 `duanju`，证书 SHA-256 `f47732e85b889a1c3ac0c727fa79f9a5245315e8d56022b4df93f99e97e27adc`，base64 见同目录 `keystore-base64.txt`；**密码不写入仓库，经聊天单独交付**）作为兜底；采用它需同步把仓库变量 `ANDROID_CERT_SHA256` 改为该指纹。该 keystore 文件与密码是今后更新 App 的唯一凭据，请妥善备份，切勿提交进任何仓库。
 
 用户已决策（2026-10-24）：换用该新签名库。操作路径：GitHub 网页端 Settings → Secrets and variables → Actions，重设四个签名 Secret（ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD），并把仓库变量 ANDROID_CERT_SHA256 改为上述指纹，随后重跑 Build app packages。当前 PAT 无 Secrets 读写权限，网页操作需用户本人完成。
+
+## 七、登录态取流实测结论（2026-10-24 晚）
+
+用户扫码（番茄小说 passport）成功收割真实登录态（14 个 cookie，含 sessionid/sessionid_ss/sid_tt，x-tt-token 取自 sessionid_ss）后，对全部取流入口做登录态 vs 游客态对照实测，**结论：登录态对取流零帮助**。
+
+| 入口 | 游客态 | 登录态 |
+| --- | --- | --- |
+| multi_video_model/v1/（hongguo-web 审核通道完整复刻：a 后缀主机 + channel=audit + device_type=audit-windows + UA hongguo-route-audit/1.0 + key"1"） | 0 字节（上午为 110001，下午已加重为断流） | **0 字节** |
+| multi_video_model/preload/v1/（onedrama 配方 key1004） | 0 字节 | **0 字节** |
+| video_model/v1/ 旧版（video_platform=3） | 0 字节 | **0 字节** |
+| video_model/v1/ 旧版（video_platform=1024） | — | **0 字节** |
+
+全部返回 HTTP 200 + 空 body，与账号无关，系红果官方服务端内容级断流。hongguo-web（sgccdev，10-06 停更）的同款路径同样已断——行业性封锁，非本 App 问题。取流双入口（preload + legacy）保持预埋，接口重开即自动恢复，无需再发版。
