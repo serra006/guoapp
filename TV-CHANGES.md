@@ -329,3 +329,46 @@ Go 的 `hostnameInSNI()` 按 RFC 6066 会裁掉尾点，所以尾点方案在 Go
 配套单测：`TestHongguoSniMaskRoutesOnlyBlockedHost`（只分流目标域名）、
 `TestHongguoSniMaskFallsBackWhenMaskedFails`（失败回落 + 冷却）。
 真实网络验证 `TestHongguoSniMaskLive` 默认 skip，需显式设 `LIVE_NET_TEST=1`。
+
+## 十三、手机端红果无法播放：CENC 加密，改用 libmpv 解密（TV 1.0.2 / 手机 0.2.71）
+
+**现象**：手机上（装 1.0.1 或 0.2.70 都一样）红果列表与封面正常，一点播放就
+`Playback error / Source error`，`VideoError`，有时伴 `Invalid NAL length
+{contentIsMalformed=true, dataType=1}`；换成移动数据也一样。
+
+**定位过程**：抓 logcat 得到链路全绿——本地代理返回 `206 video/mp4`，
+ExoPlayer 甚至已解析出 `hvc1.1.6.L186 / 1080x1880 / 30fps / 657kbps`，
+说明**网络、SNI 掩码、取流地址都没问题**，坏的是 mdat 里的样本字节。
+
+随后通过 `adb forward` 抢下代理吐出的完整 9,103,710 字节 mp4，解包确认：
+
+```
+ftyp isom → moov → trak/stbl/stsd → encv(hvcC + sinf) → … → senc / saiz / saio / sgpd / sbgp
+sinf.frma = hvc1   sinf.schm = cenc(v1.0)
+sinf.schi.tenc: default_isProtected=1  per_sample_IV_size=8  KID=6adb7223…
+senc: version 0 flags 0x0（无 subsample），sample_count=2986
+```
+
+也就是**标准 CENC（AES-128-CTR 全样本加密）**。`moov` 是明文的，所以播放器能解析出
+编码参数；`mdat` 是密文，所以一读样本就报错。这类文件的正确播放前提是
+**把 content key 交给解复用器**，ffmpeg 靠 `decryption_key`，ExoPlayer 靠
+`DrmSessionManager`（`video_player` 插件不暴露）。
+
+**根因**：`player_screen.dart` 里后端选择写成「Android 且非 TV → `LunaExoPlayer()`」，
+手机因此永远走 ExoPlayer，而 Go 侧解出来的 `CENCKey` 只在 libmpv 分支被用作
+`demuxer-lavf-o=decryption_key=…`。电视一直正常，正是因为电视走的是 mpv。
+
+**修复**：后端选择由「是不是手机」改为「这一集要不要解密」：
+
+```dart
+Platform.isAndroid && !AppDevice.isTv && !_sourceNeedsDecryption
+    ? LunaExoPlayer()
+    : Player(…)   // libmpv
+```
+
+`_sourceNeedsDecryption => widget.detail.drama.source == 'hongguo'`。红果在手机与电视上
+都走 mpv + decryption_key；其余站源保持 ExoPlayer 不变（硬解、画中画都不受影响）。
+另在 `_play` 里打一行 `[Play] 后端=… 加密key=…` 便于日后回归时一眼确认走的是哪条路。
+
+配套：`tools/grab_proxy.py` 重做——按 logcat 里出现的 URL 动态 `adb forward`，
+并发抢 `head1m / head64k / full` 三个区间，用来在会话被销毁前把原始字节留下来。

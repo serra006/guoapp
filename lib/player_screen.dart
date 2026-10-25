@@ -144,6 +144,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           defaultTargetPlatform == TargetPlatform.iOS);
   VideoEnhancementController? get _enhancementForUi =>
       _enhancement.supported ? _enhancement : null;
+  /// 红果取流返回的 mp4 带 CENC 加密，必须由 libmpv 解密（见 [_player] 初始化）。
+  /// 其它站源下发的是明文，继续用 ExoPlayer 以保住硬解与画中画。
+  bool get _sourceNeedsDecryption => widget.detail.drama.source == 'hongguo';
   PlaybackPreferences get _preferences => PlaybackPreferences(
     speed: _speed,
     quality: _requestedQuality,
@@ -182,10 +185,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     widget.store.addListener(_accessChanged);
     _player =
         widget.playerFactory?.call() ??
-        (Platform.isAndroid && !AppDevice.isTv
+        (Platform.isAndroid && !AppDevice.isTv && !_sourceNeedsDecryption
             ? LunaExoPlayer()
-            // 电视使用 libmpv：红果 CENC 加密 mp4 需要 ffmpeg decryption_key 解密，
-            // ExoPlayer（video_player 插件）无法传入解密密钥，播放必然失败。
+            // 红果下发的是 CENC(AES-128-CTR) 加密的 mp4：stsd 里是 encv +
+            // sinf/schm=cenc + senc/saiz，mdat 里全是密文。只有 libmpv 能把
+            // decryption_key 交给 ffmpeg 解密；ExoPlayer（video_player 插件）
+            // 没有 DrmSessionManager，拿到密文只能报 Source error，实测还会
+            // 被解析成 Invalid NAL length。所以红果在手机上同样强制走 mpv。
             : Player(
                 configuration: const PlayerConfiguration(
                   bufferSize: 32 * 1024 * 1024,
@@ -1045,6 +1051,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           );
           await platform.setProperty('network-timeout', '20');
         }
+        DiaryService.add(
+            '[Play] 后端=${_player is LunaExoPlayer ? 'ExoPlayer' : 'libmpv'} '
+            '加密key=${plan.decryptionKey.isEmpty ? '无' : '${plan.decryptionKey.length} 位 hex'}');
         _plan = plan;
         installed = true;
         _acceptErrors = true;
