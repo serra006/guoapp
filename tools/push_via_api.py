@@ -23,6 +23,9 @@ DESCRIPTION = (
     "真果TV · Android TV 短剧应用：10-foot 大屏重制界面，遥控器全流程，"
     "焦点三重可辨；内置 12 个站源，解析与播放全部本地完成，无自建服务器"
 )
+# 仓库右侧的 Homepage 链接，直接指向最新 Release（README 徽章也指向这里）。
+# 置空字符串即可撤掉该链接。
+HOMEPAGE = "https://github.com/serra006/guoapp/releases/latest"
 TOPICS = [
     "android-tv",
     "flutter",
@@ -80,8 +83,11 @@ def set_repo_meta():
     注意两个字段必须走不同端点——`PATCH /repos/{owner}/{repo}` 不接受 topics，
     带了也会被静默忽略，必须单独 `PUT /repos/{owner}/{repo}/topics`。
     """
-    result = api.patch(api.repo_path(), {"description": DESCRIPTION})
+    result = api.patch(
+        api.repo_path(), {"description": DESCRIPTION, "homepage": HOMEPAGE}
+    )
     print(f"简介  = {result.get('description')}")
+    print(f"主页  = {result.get('homepage')}")
     topics = api.put(api.repo_path("/topics"), {"names": TOPICS})
     print(f"topics = {', '.join(topics.get('names') or [])}")
 
