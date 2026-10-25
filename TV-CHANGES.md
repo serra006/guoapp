@@ -372,3 +372,29 @@ Platform.isAndroid && !AppDevice.isTv && !_sourceNeedsDecryption
 
 配套：`tools/grab_proxy.py` 重做——按 logcat 里出现的 URL 动态 `adb forward`，
 并发抢 `head1m / head64k / full` 三个区间，用来在会话被销毁前把原始字节留下来。
+
+---
+
+## 十四、验证：手机端红果已恢复播放（2026-10-25 18:29 实测）
+
+实测机型 **Redmi K40（M2012K11AC / Android 13 / arm64-v8a）**，无线调试安装
+`zhenguojian-tv-1.0.2-arm64-v8a.apk`（versionCode 2078，覆盖原 1.0.1 / 2077，数据保留）。
+播放两集后 logcat：
+
+```
+[Play] 后端=libmpv 加密key=32 位 hex
+[Play] 调用 _player.open: …/0d7f7bbb6ecd010bdbc223e7.mp4
+[Play] 后端=libmpv 加密key=32 位 hex
+[Play] 调用 _player.open: …/fc7d8b2c0224befbc53943f3.mp4
+```
+
+两集连播、自动接续均正常。同一时段其它 HLS 站源仍是 `后端=ExoPlayer 加密key=无`，
+硬解路径未受回归影响。**手机端红果「无法播放」确认由 CENC 加密 + 后端选错共同导致，已闭环。**
+
+附：验证「修复是否真的编进包」的有效手法——Dart AOT 快照里非 Latin-1 字符串以
+**UTF-16LE** 保存，用 UTF-8 搜 `加密key=` 会得到 MISSING 的假结论；应按
+`'加密key='.encode('utf-16-le')` 在 `lib/arm64-v8a/libapp.so` 里查找。
+
+**待发版**：`lib/main.dart` 里的启动日记把版本号硬编码成了 `0.2.64+71`（与实际版本无关，
+排查时容易误判），已改为读 `appVersion`（即 `--dart-define=APP_VERSION`）。此改动尚未提交，
+随下一次发版一起带上。
