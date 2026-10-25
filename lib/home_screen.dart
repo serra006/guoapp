@@ -12,6 +12,7 @@ import 'catalog_browser.dart';
 import 'catalog_sort.dart';
 import 'catalog_sort_sheet.dart';
 import 'design_tokens.dart';
+import 'diary_service.dart';
 import 'recommendations_screen.dart';
 import 'rankings_screen.dart';
 import 'detail_screen.dart';
@@ -540,6 +541,13 @@ class _HomeScreenState extends State<HomeScreen> {
         _loadingMore = false;
         _error = result.warning.isEmpty ? null : result.warning;
       });
+      // 搜索链路（网页搜索页 + 联想补名）任一腿退化时都会落到 warning，
+      // 记进日记便于下次不接调试线也能定位是哪一腿。
+      if (result.warning.isNotEmpty) {
+        DiaryService.add(
+          '[Search] ${query.isEmpty ? group.name : query} 命中 ${result.items.length} 条，降级：${result.warning}',
+        );
+      }
       unawaited(
         saveUserChange(context, () => widget.store.refreshDramas(result.items)),
       );
@@ -559,6 +567,9 @@ class _HomeScreenState extends State<HomeScreen> {
       accept(result);
     } catch (error) {
       if (!mounted || generation != _generation) return;
+      DiaryService.add(
+        '[Search] ${query.isEmpty ? group.name : query} 失败：$error',
+      );
       setState(() {
         _loading = false;
         _loadingMore = false;

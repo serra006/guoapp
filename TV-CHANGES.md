@@ -398,3 +398,36 @@ Platform.isAndroid && !AppDevice.isTv && !_sourceNeedsDecryption
 **待发版**：`lib/main.dart` 里的启动日记把版本号硬编码成了 `0.2.64+71`（与实际版本无关，
 排查时容易误判），已改为读 `appVersion`（即 `--dart-define=APP_VERSION`）。此改动尚未提交，
 随下一次发版一起带上。
+
+---
+
+## 十五、红果搜索「暂时无法加载」修复（2026-10-25 19:00）
+
+**实测结论（掩码 SNI 直连 hongguoduanju.com，脚本 `tools/diag_hongguo_search.py`）**
+
+| 请求 | 结果 |
+|---|---|
+| `/search/都市` | 200，37199 B，正文是 `<div id="root"><!--<?- html ?>--></div>` 纯模板壳，**无 routerData / searchList** |
+| 同上换 UA（iPhone / Android / 桌面）、路径变体、带 ttwid cookie 重放 | 全部同样空壳 |
+| `/`（首页，143 KB）、`/detail?series_id=` | routerData 正常，仍是服务端渲染 |
+| `/incent_resource/suggestion?app_id=8662&query=都市` | 200，20 条，其中 `short_play_name` 才带 `video_data.series_id`（3~8 条） |
+| `/incent_resource/search`、`search_series`、`series_search`、`/api/search*` 等 18 个候选 | 全部 404 |
+
+即：**红果把搜索页改成了客户端渲染（React SPA，chunk `search.fe0ab865c5.js`），HTML 里不再内嵌结果**；
+首页与详情未受影响，所以只有搜索坏。
+
+**根因**：搜索有两条腿——网页 HTML（`page`）与联想补名（`names`）。`page` 因 SPA 化必然失败；
+`names` 受 `hongguoSuggestionTimeout = 5s` 限制，而 SNI 掩码通道冷连经常超过 5s，
+于是两条腿同时为空，`_items.isEmpty && _error != null` → 界面显示「暂时无法加载」。
+
+**修复**
+1. 搜索补名超时 5s → 15s（新增 `hongguoSearchNameTimeout`，作为参数传入
+   `fetchHongguoSuggestionRecords`）；UI 联想下拉仍用 5s。
+2. 剧集判定改为「`series_id` 合法即收」，去掉 `word_type == short_play_name` 白名单
+   （红果调整过类型枚举，白名单会把结果静默过滤干净）。
+3. 新增**二级联想**：把一级返回的剧名词 / 分类词 / 热词再各查一次联想（最多 5 个并发），
+   实测能把命中从 3 条提到十几条；补季路径改走 `fetchHongguoSearchNamesLight`
+   （只一级），否则 32 次补季查询会把请求量放大到近 200 个。
+4. 页面返回 SSR 空壳时直接报「红果搜索页已改为客户端渲染，页面不再内嵌结果」，不再笼统报"未返回有效结果"。
+5. 联想结果 ≥6 条时不再挂"搜索页已改版"的提示，避免每次搜索都像出故障。
+6. `home_screen` 的搜索成功 / 失败都写一条 `[Search]` 日记，下次不接调试线也能定位。

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -19,6 +20,10 @@ const (
 	hongguoSearchPageTimeout  = 12 * time.Second
 	hongguoSearchPendingLimit = 32
 	hongguoSearchNameCount    = 50
+	// 二级联想最多补查多少个剧名词（并发），兼顾结果数量与请求量。
+	hongguoSearchExpandLimit = 5
+	// 联想结果达到这个数量就不再提示「搜索页已改版」，避免每次搜索都报警告。
+	hongguoSearchQuietThreshold = 6
 )
 
 type hongguoSearchEntry struct {
@@ -190,7 +195,11 @@ func (downloader *Downloader) fetchHongguoSearch(ctx context.Context, keyword st
 		return false
 	})
 	if pageErr != nil {
-		entry.Warning = "红果综合搜索暂不可用，已保留名称匹配结果，可重试"
+		// 搜索页已改客户端渲染，这条腿基本拿不到数据；只要联想结果够看就不打扰用户，
+		// 命中太小时才提示（否则每次搜索都挂一条警告，反而像故障）。
+		if len(entry.Dramas) < hongguoSearchQuietThreshold {
+			entry.Warning = "红果搜索页已改版，当前仅显示联想命中的剧集，可重试"
+		}
 	} else if namesErr != nil {
 		entry.Warning = "红果名称检索暂不可用，结果可能缺少部分剧集，可重试"
 	}
@@ -227,14 +236,60 @@ func mergeHongguoSearchDramas(dramas, batch []Drama) []Drama {
 }
 
 func (downloader *Downloader) fetchHongguoSearchNames(ctx context.Context, keyword string) ([]Drama, error) {
-	records, err := downloader.fetchHongguoSuggestionRecords(ctx, keyword, hongguoSearchNameCount)
+	return downloader.fetchHongguoSearchNamesWith(ctx, keyword, true)
+}
+
+// fetchHongguoSearchNamesLight 只取一级联想，不做二级扩展。
+// 补季逻辑会对同一关键词反复查询（上限 32 次），若每次都带二级扩展，
+// 请求量会放大到近 200 个，既慢又容易触发风控。
+func (downloader *Downloader) fetchHongguoSearchNamesLight(ctx context.Context, keyword string) ([]Drama, error) {
+	return downloader.fetchHongguoSearchNamesWith(ctx, keyword, false)
+}
+
+func (downloader *Downloader) fetchHongguoSearchNamesWith(ctx context.Context, keyword string, expand bool) ([]Drama, error) {
+	records, err := downloader.fetchHongguoSuggestionRecords(ctx, keyword, hongguoSearchNameCount, hongguoSearchNameTimeout)
 	if err != nil {
 		return nil, err
 	}
+	dramas := hongguoSuggestionDramas(records)
+	if !expand {
+		return dramas, nil
+	}
+	// 一级联想通常只回几条带 series_id 的短剧，其余是剧名/热词/分类词。
+	// 红果搜索页改成客户端渲染后 HTML 里已经没有结果，这里用这些剧名词再
+	// 各查一次联想（二级联想），把相关剧集补到十几条，搜索才真正可用。
+	queries := hongguoSuggestionQueries(records, hongguoSearchExpandLimit)
+	if len(queries) == 0 {
+		return dramas, nil
+	}
+	batches := make([][]Drama, len(queries))
+	var wg sync.WaitGroup
+	for index, query := range queries {
+		wg.Add(1)
+		go func(index int, query string) {
+			defer wg.Done()
+			extra, extraErr := downloader.fetchHongguoSuggestionRecords(
+				ctx, query, hongguoSearchNameCount, hongguoSearchNameTimeout)
+			if extraErr != nil {
+				return // 二级联想失败不影响一级结果
+			}
+			batches[index] = hongguoSuggestionDramas(extra)
+		}(index, query)
+	}
+	wg.Wait()
+	for _, batch := range batches {
+		dramas = mergeHongguoSearchDramas(dramas, batch)
+	}
+	return dramas, nil
+}
+
+// hongguoSuggestionDramas 从联想条目里取出可识别的剧集。
+// 判据只看 series_id 是否合法，不再依赖 word_type 白名单：红果调整过类型枚举，
+// 白名单对不上就会把结果静默过滤干净（表现为「搜索暂时无法加载」而接口其实有数据）。
+func hongguoSuggestionDramas(records []hongguoSuggestionRecord) []Drama {
 	dramas := make([]Drama, 0, len(records))
 	for _, record := range records {
-
-		if record.WordType != "short_play_name" || !hongguoNumericID.MatchString(mapString(record.VideoData, "series_id_str", "series_id")) {
+		if !hongguoNumericID.MatchString(mapString(record.VideoData, "series_id_str", "series_id")) {
 			continue
 		}
 		drama := hongguoDramaFromAny(map[string]any{"video_data": record.VideoData, "name": record.Name, "keyword": record.Keyword}, "短剧")
@@ -242,7 +297,37 @@ func (downloader *Downloader) fetchHongguoSearchNames(ctx context.Context, keywo
 			dramas = append(dramas, drama)
 		}
 	}
-	return dramas, nil
+	return dramas
+}
+
+// hongguoSuggestionQueries 挑出一级联想里值得二次查询的「剧名类」词。
+func hongguoSuggestionQueries(records []hongguoSuggestionRecord, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	out := make([]string, 0, limit)
+	seen := make(map[string]bool, len(records))
+	for _, record := range records {
+		name := strings.TrimSpace(record.Name)
+		if name == "" || utf8.RuneCountInString(name) < 3 {
+			continue
+		}
+		switch record.WordType {
+		case "title", "short_play_category", "common_query":
+		default:
+			continue
+		}
+		key := hongguoSearchText(name)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, name)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 func cloneHongguoSearchEntry(entry hongguoSearchEntry) hongguoSearchEntry {
@@ -296,6 +381,12 @@ func (downloader *Downloader) fetchHongguoSearchPage(ctx context.Context, keywor
 	body, err := downloader.fetchProviderText(ctx, pageURL, hongguoBaseURL+"/")
 	if err != nil {
 		return hongguoSearchEntry{}, err
+	}
+	if strings.Contains(body, "<?- html ?>") {
+		// 红果 2026-10 起把 /search/ 改成纯客户端渲染（React SPA）：服务端只回
+		// SSR 模板壳 <div id="root"><!--<?- html ?>--></div>，结果由前端 JS 现取，
+		// HTML 里已经没有 routerData / searchList。首页与 /detail 仍是服务端渲染。
+		return hongguoSearchEntry{}, errors.New("红果搜索页已改为客户端渲染，页面不再内嵌结果")
 	}
 	page := routerLoaderMap(parseRouterData(body), "search_(keyword)/page", "search_")
 	rows, valid := page["searchList"].([]any)

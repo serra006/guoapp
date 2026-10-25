@@ -217,7 +217,7 @@ func (downloader *Downloader) completeHongguoSearchSeasons(ctx context.Context, 
 			}
 			attempted[query] = true
 			requests++
-			names, err := downloader.fetchHongguoSearchNames(ctx, query)
+			names, err := downloader.fetchHongguoSearchNamesLight(ctx, query)
 			if err != nil {
 				return true
 			}

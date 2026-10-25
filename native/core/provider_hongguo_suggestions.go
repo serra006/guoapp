@@ -18,7 +18,11 @@ const (
 	hongguoSuggestionPendingLimit = 32
 	hongguoSuggestionBodyLimit    = 256 * 1024
 	hongguoSuggestionTimeout      = 5 * time.Second
-	hongguoSuggestionTTL          = 2 * time.Minute
+	// 搜索「补名」走同一个联想接口，但它要撑起整条搜索结果，必须容忍
+	// SNI 掩码通道首次建连的额外耗时（5s 在弱网/冷连下会直接超时，
+	// 表现为「搜索暂时无法加载」而其它功能正常）。
+	hongguoSearchNameTimeout = 15 * time.Second
+	hongguoSuggestionTTL     = 2 * time.Minute
 )
 
 type hongguoSearchSuggestion struct {
@@ -109,7 +113,7 @@ func (d *Downloader) hongguoSearchSuggestions(ctx context.Context, query string)
 }
 
 func (d *Downloader) fetchHongguoSearchSuggestions(ctx context.Context, query string) ([]hongguoSearchSuggestion, error) {
-	records, err := d.fetchHongguoSuggestionRecords(ctx, query, hongguoSuggestionLimit)
+	records, err := d.fetchHongguoSuggestionRecords(ctx, query, hongguoSuggestionLimit, hongguoSuggestionTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -136,8 +140,11 @@ func (d *Downloader) fetchHongguoSearchSuggestions(ctx context.Context, query st
 	return items, nil
 }
 
-func (d *Downloader) fetchHongguoSuggestionRecords(ctx context.Context, query string, count int) ([]hongguoSuggestionRecord, error) {
-	ctx, cancel := context.WithTimeout(ctx, hongguoSuggestionTimeout)
+func (d *Downloader) fetchHongguoSuggestionRecords(ctx context.Context, query string, count int, timeout time.Duration) ([]hongguoSuggestionRecord, error) {
+	if timeout <= 0 {
+		timeout = hongguoSuggestionTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	params := url.Values{"app_id": {"8662"}, "query": {query}, "count": {strconv.Itoa(count)}}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, hongguoBaseURL+"/incent_resource/suggestion?"+params.Encode(), nil)
@@ -149,7 +156,7 @@ func (d *Downloader) fetchHongguoSuggestionRecords(ctx context.Context, query st
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
 
-	response, err := d.doCatalogRequestWithTimeout(request, hongguoSuggestionTimeout)
+	response, err := d.doCatalogRequestWithTimeout(request, timeout)
 	if err != nil {
 		return nil, err
 	}
