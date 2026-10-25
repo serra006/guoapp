@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // 鬼片网（guipian）原生站源：MacCMS 风格的 HTML 站点，鬼片/电视剧/动漫三大类。
@@ -78,6 +79,16 @@ var (
 	reGuipianRSSTitle   = regexp.MustCompile(`(?is)<title>\s*(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</title>`)
 	reGuipianRSSLink    = regexp.MustCompile(`(?is)/nv/(\d+)\.html`)
 	reGuipianTag        = regexp.MustCompile(`<[^>]+>`)
+	reGuipianPlayPath   = regexp.MustCompile(`(?i)^/play/(\d+)-(\d+)-(\d+)\.html$`)
+)
+
+// 鬼片网同一部剧有多条线路，各线路的视频挂在完全不同的 CDN 域名上。
+// 网络侧按域名封了其中一部分（DNS 劫持到反诈页 + SNI 阻断），所以「选分集最多的线路」
+// 会稳定选中一条被封的线。播放阶段按线路顺序逐个试，第一个真正拿到 m3u8 的线路胜出。
+const (
+	guipianMediaLineCount   = 8
+	guipianMediaLineLimit   = 5
+	guipianMediaLineTimeout = 8 * time.Second
 )
 
 func validGuipianCategory(category string) bool {
@@ -476,6 +487,112 @@ func (d *Downloader) resolveGuipianMedia(ctx context.Context, task Task) (provid
 	if guipianPlayURL(playURL) == "" {
 		return providerMedia{}, errors.New("鬼片网播放页地址无效")
 	}
+	candidates := guipianMediaCandidates(playURL, d.guipianPreferredLine(sourceID))
+	var lastErr error
+	for _, candidate := range candidates {
+		if ctx.Err() != nil {
+			break
+		}
+		// 每条线路单独限时：被封的域名常见表现是握手后长时间无响应，
+		// 共用外层 ctx 会让第一条慢线路把整个播放请求的时间预算吃光。
+		attemptCtx, cancel := context.WithTimeout(ctx, guipianMediaLineTimeout)
+		media, err := d.resolveGuipianMediaAt(attemptCtx, candidate.url)
+		cancel()
+		if err == nil {
+			d.guipianRememberLine(sourceID, candidate.line)
+			return media, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = errors.New("鬼片网该集暂无可用播放地址")
+	}
+	return providerMedia{}, lastErr
+}
+
+type guipianLineCandidate struct {
+	line int
+	url  string
+}
+
+// guipianMediaCandidates 按「上次可用线路 → 本集原有线路 → 其余线路」排出探测顺序。
+func guipianMediaCandidates(playURL string, preferred int) []guipianLineCandidate {
+	id, line, episode, ok := guipianPlayLineParts(playURL)
+	if !ok {
+		return []guipianLineCandidate{{line: -1, url: playURL}}
+	}
+	order := make([]int, 0, guipianMediaLineCount)
+	seen := map[int]bool{}
+	appendLine := func(index int) {
+		if index < 0 || index >= guipianMediaLineCount || seen[index] {
+			return
+		}
+		seen[index] = true
+		order = append(order, index)
+	}
+	appendLine(preferred)
+	appendLine(line)
+	for index := 0; index < guipianMediaLineCount; index++ {
+		appendLine(index)
+	}
+	if len(order) > guipianMediaLineLimit {
+		order = order[:guipianMediaLineLimit]
+	}
+	candidates := make([]guipianLineCandidate, 0, len(order))
+	for _, index := range order {
+		candidates = append(candidates, guipianLineCandidate{
+			line: index,
+			url: fmt.Sprintf("%s/play/%s-%d-%s.html",
+				guipianSiteBaseURL, id, index, episode),
+		})
+	}
+	return candidates
+}
+
+// guipianPlayLineParts 拆出播放页路径里的剧集 ID、线路号与集序号：
+// /play/{剧集ID}-{线路}-{集序号}.html。
+func guipianPlayLineParts(playURL string) (string, int, string, bool) {
+	parsed, err := url.Parse(playURL)
+	if err != nil {
+		return "", 0, "", false
+	}
+	match := reGuipianPlayPath.FindStringSubmatch(parsed.Path)
+	if len(match) < 4 {
+		return "", 0, "", false
+	}
+	line, err := strconv.Atoi(match[2])
+	if err != nil {
+		return "", 0, "", false
+	}
+	return match[1], line, match[3], true
+}
+
+// 记住每部剧实测可用的线路，避免每次播放都从被封的第一条线开始重试。
+func (d *Downloader) guipianPreferredLine(sourceID string) int {
+	d.guipianMu.Lock()
+	defer d.guipianMu.Unlock()
+	if line, ok := d.guipianLines[sourceID]; ok {
+		return line
+	}
+	return -1
+}
+
+func (d *Downloader) guipianRememberLine(sourceID string, line int) {
+	if line < 0 || sourceID == "" {
+		return
+	}
+	d.guipianMu.Lock()
+	defer d.guipianMu.Unlock()
+	if d.guipianLines == nil {
+		d.guipianLines = map[string]int{}
+	}
+	if len(d.guipianLines) >= 128 {
+		d.guipianLines = map[string]int{}
+	}
+	d.guipianLines[sourceID] = line
+}
+
+func (d *Downloader) resolveGuipianMediaAt(ctx context.Context, playURL string) (providerMedia, error) {
 	body, err := d.guipianGet(ctx, playURL)
 	if err != nil {
 		return providerMedia{}, err

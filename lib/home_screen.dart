@@ -56,6 +56,10 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loadingMore = false;
   bool _hasMore = true;
   String? _error;
+  /// 与 _error 区分：_error 也可能是「降级提示」（部分结果可用），
+  /// 只有请求真的抛异常才算失败。否则「搜索命中 0 条」会被渲染成「暂时无法加载」，
+  /// 看上去像站源挂了，实际上是没有匹配结果。
+  bool _failed = false;
   int _generation = 0;
   int _tab = 0;
   String _submittedQuery = '';
@@ -522,6 +526,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final query = _onlineSearch ? _search.text.trim() : '';
     setState(() {
       _error = null;
+      _failed = false;
       if (query.isNotEmpty) _categorySelections[group.id] = '';
       if (more) {
         _loadingMore = true;
@@ -539,6 +544,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _submittedQuery = query;
         _loading = cached && !result.fresh;
         _loadingMore = false;
+        _failed = false;
         _error = result.warning.isEmpty ? null : result.warning;
       });
       // 搜索链路（网页搜索页 + 联想补名）任一腿退化时都会落到 warning，
@@ -573,6 +579,7 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _loading = false;
         _loadingMore = false;
+        _failed = true;
         _error = error.toString();
       });
     }
@@ -1369,7 +1376,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ],
                       ),
                     )
-                  : _items.isEmpty && _error != null
+                  : _items.isEmpty && _failed
                   ? StatusPanel(
                       title: '暂时无法加载',
                       message: _error!,
@@ -1386,11 +1393,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   : items.isEmpty
                   ? StatusPanel(
                       title: '没有找到匹配的短剧',
-                      message: _hideVip
-                          ? '可以换个搜索词，或显示 VIP 内容。'
-                          : widget.store.sources.length > 1
-                          ? '可以换个搜索词或切换站源。'
-                          : '可以换个搜索词，或刷新后重试。',
+                      message: _error ??
+                          (_hideVip
+                              ? '可以换个搜索词，或显示 VIP 内容。'
+                              : widget.store.sources.length > 1
+                              ? '可以换个搜索词或切换站源。'
+                              : '可以换个搜索词，或刷新后重试。'),
                       onRetry:
                           _hasMore &&
                               !_loadingMore &&

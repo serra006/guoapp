@@ -431,3 +431,54 @@ Platform.isAndroid && !AppDevice.isTv && !_sourceNeedsDecryption
 4. 页面返回 SSR 空壳时直接报「红果搜索页已改为客户端渲染，页面不再内嵌结果」，不再笼统报"未返回有效结果"。
 5. 联想结果 ≥6 条时不再挂"搜索页已改版"的提示，避免每次搜索都像出故障。
 6. `home_screen` 的搜索成功 / 失败都写一条 `[Search]` 日记，下次不接调试线也能定位。
+
+---
+
+## 十六、七猫搜索接回官方接口 + 鬼片多线路/掩码通道（2026-10-26）
+
+### 1. 七猫：搜索接口其实一直存在（TV/手机都受影响）
+
+旧代码注释写「七猫搜索接口已停用」，改成在推荐页 62 条里做标题匹配 —— 实测
+`都市/霸道/穿越` 这类词命中 **0~1 条**，所以「搜不到」是常态。
+
+盲测 18 个候选路径后拿到真接口：
+
+| 项 | 值 |
+|---|---|
+| 路径 | `GET https://api-store.qmplaylet.com/api/v1/playlet/search` |
+| 关键词参数 | **`wd`**（不是 keyword/query；用错参数名会返回 `list: null`） |
+| 签名 | `md5(参数名字母序拼接 + "d3dGiJc651gSQ8w1")`，即 `page=<n>wd=<词>` |
+| 返回 | 每页 10 条，`meta.next_page` 指示还有下一页（「都市」实测 total_pages=289） |
+| 字段差异 | 搜索给 `id`（目录给 `playlet_id`）、集数在 `total_num`（形如 `78集`）、标题带 `<font>` 高亮标签、题材在 `sub_title` |
+| 详情可复用 | `api-read…/player/api/v1/playlet/info?playlet_id=<id>` 直接可用（「都市无上仙尊」78 集全部可取到 video_url） |
+
+改法：新增 `qimaoSearchAddress/qimaoSearchRows/searchQimaoNative`，搜索走真接口并支持翻页；
+接口异常或当页空结果时才退回旧的标题匹配兜底。**注意**：接口正常但无匹配时返回空列表（不再挂
+warning），否则会走 `catalog_browser` 的 AppFailure 分支显示「暂时无法加载」。
+
+### 2. 鬼片：不是解析坏了，是 CDN 被 DNS 劫持 + SNI 阻断（双重）
+
+实测（`tools/diag_guipian.py`、`tools/diag_guipian_lines.py`、`tools/diag_guipian_cdn.py`）：
+
+| 环节 | 结果 |
+|---|---|
+| 列表页 / 详情页 / 播放页 | 200，5 条线路、分集链接齐全，`var now` 正常给出 m3u8 |
+| 线路 CDN 域名 | `v1.qqqrst.com` / `v10.ppqrrs.com` / `v13.rstu6.com` … 系统 DNS 一律解析到 **183.192.65.101**（上海市反诈提示页，HTTP 200 + text/html，伪装成正常响应） |
+| 真实 IP | 只能靠 **TCP 53** 问 223.5.5.5 / 114.114.114.114 才拿得到（216.180.x.x 段） |
+| 直连真实 IP + 真 SNI | TLS 握手期被 RST |
+| 真实 IP + **裸域 SNI**（`rstu6.com`）+ Host 仍是 `v13.rstu6.com` | **200 + 真 m3u8**，可下到分片（`ts` 409600B，首字节 0x47） |
+| 证书 | 这些 CDN 本来就是跨域证书（`rstu6.com` 的 IP 返回 `*.bxgbnet.com`），校验证书对它们没有意义 |
+
+因此做了两件事：
+
+1. **播放阶段自动换线**：`resolveGuipianMedia` 按「上次可用线路 → 本集原线路 → 其余线路」
+   逐个试（最多 5 条，每条 8s），并记住每部剧可用的线路号（`guipianLines`），
+   避免每次都从被封的第一条线重试。
+2. **CDN 掩码通道**（`native/core/network_cdn_mask.go`）：主机名形如 `v<数字>.<域>` 时，
+   改用 DoH 取到的真实 IP + 裸域 SNI + 跳过证书校验建连，Host 头保持不变；
+   只对这类主机启用，其余域名完全透传，掩码失败会有 3 分钟冷却并回落原链路。
+
+### 3. 界面：搜索 0 条不再显示「暂时无法加载」
+
+`home_screen` 里 `_error` 同时承载「真失败」和「降级提示」，导致 0 结果被渲染成错误页。
+新增 `_failed` 只在 catch 里置位：真失败才显示「暂时无法加载」，0 结果显示「没有找到匹配的短剧」。

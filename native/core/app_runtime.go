@@ -71,6 +71,8 @@ type Downloader struct {
 	legacy                *legacyAPIClient
 	previewMu             sync.Mutex
 	previewSessions       map[string]*huangguoPreviewSession
+	guipianMu             sync.Mutex
+	guipianLines          map[string]int
 }
 
 func defaultConfig() Config { return Config{MaxPagesPerSort: 50, PageSize: 30, Retries: 2} }
@@ -265,11 +267,15 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 	transport.MaxIdleConnsPerHost = 8
 	transport.ResponseHeaderTimeout = 20 * time.Second
 	transport.Proxy = router.proxy
-	cdn := newCDNTransport(transport, newDNSResolver(transport))
+	resolver := newDNSResolver(transport)
+	cdn := newCDNTransport(transport, resolver)
 	// 红果入口域名在部分网络会被按 SNI 阻断，这里只对该域名改用伪装 SNI 握手，
 	// 其余域名与 CDN 优选、代理、浏览器指纹链路完全不变。
 	browser := newHuangguoBrowserTransport(cdn, d)
-	d.client = &http.Client{Transport: newHongguoSniMaskTransport(browser, transport), Timeout: 45 * time.Second,
+	// 鬼片一类站点的视频挂在 vNN.<裸域> 的 CDN 上，这些域名同时遭到 DNS 劫持与
+	// SNI 阻断，只能走「真实 IP + 裸域 SNI」的通道；其余域名完全透传。
+	masked := newGuipianCdnMaskTransport(newHongguoSniMaskTransport(browser, transport), transport, resolver)
+	d.client = &http.Client{Transport: masked, Timeout: 45 * time.Second,
 		CheckRedirect: func(request *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return errors.New("站源重定向次数过多")
@@ -583,9 +589,8 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 			result.Items = append(result.Items, nativeNormalize(drama))
 		}
 		result.HasMore = more
-		if len(items) == 0 {
-			result.Warning = "七猫暂未找到匹配剧集，可换个关键词或用分类浏览"
-		}
+		// 不在这里给「0 条」挂 warning：七猫搜索接口正常但没有匹配时是正常空结果，
+		// 挂了 warning 会走 catalog_browser 的 AppFailure 分支，界面变成「暂时无法加载」。
 		return result, nil
 	}
 	if query != "" && (source == sourceYeguo || source == sourceDSD) {

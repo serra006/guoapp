@@ -244,6 +244,121 @@ func qimaoDetailAddress(sourceID string) string {
 		"&sign=" + qimaoParamSign("playlet_id="+sourceID)
 }
 
+// qimaoSearchAddress 七猫真正的搜索接口。早期版本误判为「已停用」——
+// 其实一直存在，只是参数名是 wd（不是 keyword/query），签名按参数名字母序拼接：
+// 先 page 后 wd。每页 10 条，meta.next_page 表示还有下一页。
+func qimaoSearchAddress(keyword string, page int) string {
+	if page < 1 {
+		page = 1
+	}
+	value := strconv.Itoa(page)
+	return qimaoStoreBaseURL + "/api/v1/playlet/search?page=" + value +
+		"&wd=" + url.QueryEscape(keyword) +
+		"&sign=" + qimaoParamSign("page="+value+"wd="+keyword)
+}
+
+// qimaoCleanTitle 去掉搜索返回标题里的 <font> 高亮标签。
+func qimaoCleanTitle(text string) string {
+	if !strings.Contains(text, "<") {
+		return strings.TrimSpace(text)
+	}
+	var builder strings.Builder
+	depth := 0
+	for _, r := range text {
+		switch {
+		case r == '<':
+			depth++
+		case r == '>':
+			if depth > 0 {
+				depth--
+			}
+		case depth == 0:
+			builder.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+// qimaoEpisodeNumber 从「78集」这类文本里取集数。
+func qimaoEpisodeNumber(text string) int {
+	digits := make([]rune, 0, 6)
+	for _, r := range strings.TrimSpace(text) {
+		if r >= '0' && r <= '9' {
+			digits = append(digits, r)
+			continue
+		}
+		if len(digits) > 0 {
+			break
+		}
+	}
+	if len(digits) == 0 {
+		return 0
+	}
+	number, err := strconv.Atoi(string(digits))
+	if err != nil || number < 0 || number > 100000 {
+		return 0
+	}
+	return number
+}
+
+// qimaoSearchRows 把搜索接口的行规整成目录接口的字段口径后复用通用映射：
+// 搜索给 id（目录给 playlet_id）、total_num 形如「78集」、标题带高亮标签、
+// 题材放在 sub_title（目录放在 tags）。
+func qimaoSearchRows(rows []any) []Drama {
+	items := make([]Drama, 0, len(rows))
+	seen := map[string]bool{}
+	for _, entry := range rows {
+		row, _ := entry.(map[string]any)
+		if len(row) == 0 {
+			continue
+		}
+		normalized := make(map[string]any, len(row)+4)
+		for key, value := range row {
+			normalized[key] = value
+		}
+		if nativeText(normalized["playlet_id"]) == "" {
+			normalized["playlet_id"] = row["id"]
+		}
+		normalized["title"] = qimaoCleanTitle(nativeText(row["title"]))
+		if nativeText(normalized["total_episode_num"]) == "" {
+			if number := qimaoEpisodeNumber(nativeText(row["total_num"])); number > 0 {
+				normalized["total_episode_num"] = strconv.Itoa(number)
+			}
+		}
+		if nativeText(normalized["tags"]) == "" {
+			normalized["tags"] = nativeText(row["sub_title"])
+		}
+		drama, err := qimaoDramaFromMap(normalized)
+		if err != nil || drama.ID == "" || seen[drama.ID] {
+			continue
+		}
+		seen[drama.ID] = true
+		items = append(items, drama)
+	}
+	return items
+}
+
+// searchQimaoNative 调真实搜索接口；失败或空结果由调用方决定是否降级。
+func (d *Downloader) searchQimaoNative(ctx context.Context, keyword string, page int) ([]Drama, bool, error) {
+	value, err := d.qimaoRequest(ctx, qimaoSearchAddress(keyword, page), 4<<20)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := qimaoPayloadError(value); err != nil {
+		return nil, false, err
+	}
+	data := qimaoData(value)
+	rows, err := qimaoRows(data, "list", 200)
+	if err != nil {
+		return nil, false, err
+	}
+	more := false
+	if meta, ok := data["meta"].(map[string]any); ok {
+		more = nativeText(meta["next_page"]) != ""
+	}
+	return qimaoSearchRows(rows), more, nil
+}
+
 func qimaoDramaFromMap(row map[string]any) (Drama, error) {
 	id := nativeText(row["playlet_id"])
 	title := strings.TrimSpace(nativeText(row["title"]))
@@ -335,13 +450,14 @@ func qimaoDramasFromRows(rows []any) ([]Drama, error) {
 	return items, nil
 }
 
-// fetchQimaoCatalogPage 七猫接口不支持分页，只有单页结果；page>1 返回空表示到底。
+// fetchQimaoCatalogPage 目录接口不支持分页（page>1 返回空表示到底）；
+// 搜索接口支持分页，由 meta.next_page 决定 hasMore。
 func (d *Downloader) fetchQimaoCatalogPage(ctx context.Context, page int, category, query string) ([]Drama, bool, error) {
 	if page < 1 || page > 1000000 || len(query) > 1024 || !validQimaoCategory(category) {
 		return nil, false, errors.New("七猫目录查询参数无效")
 	}
 	if strings.TrimSpace(query) != "" {
-		return d.searchQimaoDramas(ctx, query)
+		return d.searchQimaoDramas(ctx, query, page)
 	}
 	if page > 1 {
 		return nil, false, nil
@@ -364,8 +480,43 @@ func (d *Downloader) fetchQimaoCatalogPage(ctx context.Context, page int, catego
 	return items, false, nil
 }
 
-// searchQimaoDramas 七猫搜索接口已停用（返回空列表），因此改为在推荐页与命中分类页的标题里匹配。
-func (d *Downloader) searchQimaoDramas(ctx context.Context, query string) ([]Drama, bool, error) {
+// searchQimaoDramas 先走官方搜索接口；该接口异常或当页无结果时，
+// 退回「推荐页 + 命中分类页的标题匹配」这条兜底路径（覆盖度差，但不会空白）。
+func (d *Downloader) searchQimaoDramas(ctx context.Context, query string, page int) ([]Drama, bool, error) {
+	query = strings.TrimSpace(query)
+	if query == "" || len(query) > 64 {
+		return nil, false, errors.New("七猫搜索关键词无效")
+	}
+	if page < 1 {
+		page = 1
+	}
+	items, more, nativeErr := d.searchQimaoNative(ctx, query, page)
+	if nativeErr == nil && len(items) > 0 {
+		return items, more, nil
+	}
+	if page > 1 {
+		// 翻页阶段拿不到就不再降级，否则会把兜底结果重复堆在后面的页里。
+		if nativeErr != nil {
+			return nil, false, nativeErr
+		}
+		return nil, false, nil
+	}
+	fallbackItems, _, fallbackErr := d.searchQimaoFallback(ctx, query)
+	if len(fallbackItems) == 0 {
+		// 搜索接口本身出错、兜底也没捞到东西，才是真的失败（界面显示「暂时无法加载」）；
+		// 接口正常但没有匹配剧集时返回空列表，界面显示「没有找到匹配的短剧」。
+		if nativeErr != nil {
+			return nil, false, nativeErr
+		}
+		if fallbackErr != nil {
+			return nil, false, fallbackErr
+		}
+	}
+	return fallbackItems, false, nil
+}
+
+// searchQimaoFallback 在推荐页与命中分类页的标题里匹配（搜索接口不可用时的兜底）。
+func (d *Downloader) searchQimaoFallback(ctx context.Context, query string) ([]Drama, bool, error) {
 	query = strings.TrimSpace(query)
 	if query == "" || len(query) > 64 {
 		return nil, false, errors.New("七猫搜索关键词无效")
