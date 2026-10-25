@@ -17,7 +17,10 @@ import urllib.request
 
 ROOT = r"E:\6\guoapp"
 OWNER, REPO = "serra006", "guoapp"
-PROXIES = [None, "http://127.0.0.1:20808"]
+
+# 通道优先级：环境变量里配的代理（系统/终端代理，端口会变） -> 直连 -> 20808（v2rayN 老端口）
+_ENV_PROXY = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or ""
+PROXIES = [p for p in (_ENV_PROXY, None, "http://127.0.0.1:20808") if p]
 
 
 def token():
