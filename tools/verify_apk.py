@@ -13,7 +13,10 @@ import zipfile
 
 BT = r"C:\Users\se\AppData\Local\Android\Sdk\build-tools\36.1.0"
 AAPT2 = os.path.join(BT, "aapt2.exe")
-APKSIGNER = os.path.join(BT, "apksigner.bat")
+# apksigner.bat 在本机会报 "Unable to access jarfile"（bat 里 %~dp0 解析有问题），
+# 直接用 java -jar 调同一个 jar 才稳定。
+APKSIGNER_JAR = os.path.join(BT, "lib", "apksigner.jar")
+JAVA = "java"
 
 
 def badging(apk):
@@ -28,22 +31,24 @@ def badging(apk):
         "versionCode": int(pkg.group(2)) if pkg else 0,
         "versionName": pkg.group(3) if pkg else "?",
         "abis": " ".join(a.strip("'") for a in abis) if abis else "?",
-        "sdk": (re.search(r"sdkVersion:'(\d+)'", txt) or [None, "?"])[1],
+        "sdk": (re.search(r"targetSdkVersion:'(\d+)'", txt) or [None, "?"])[1],
         "minsdk": (re.search(r"minSdkVersion:'(\d+)'", txt) or [None, "?"])[1],
         "label": (re.search(r"application-label:'([^']*)'", txt) or [None, "?"])[1],
     }, None
 
 
 def signature(apk):
-    out = subprocess.run([APKSIGNER, "verify", "--print-certs", apk],
+    out = subprocess.run([JAVA, "-jar", APKSIGNER_JAR, "verify", "-v", "--print-certs", apk],
                          capture_output=True, text=True)
     txt = out.stdout + out.stderr
     if out.returncode != 0:
-        return "验签失败: " + txt.strip().splitlines()[-1][:120] if txt.strip() else "验签失败"
+        tail = txt.strip().splitlines()[-1][:120] if txt.strip() else "无输出"
+        return "验签失败: " + tail
     dt = re.search(r"certificate DN: (.+)", txt)
     sha = re.search(r"certificate SHA-256 digest: ([0-9a-f]+)", txt)
-    scheme = "v2+" if "v2" in txt or "Verified using v2" in txt else "v1"
-    return f"{scheme} | {(dt.group(1).strip() if dt else '?')} | sha256:{sha.group(1)[:16] if sha else '?'}"
+    schemes = re.findall(r"Verified using (v\d+) scheme[^:]*: true", txt)
+    return (f"{'+'.join(schemes) or '?'} | {(dt.group(1).strip() if dt else '?')} | "
+            f"sha256:{sha.group(1)[:16] if sha else '?'}")
 
 
 def natlibs(apk):

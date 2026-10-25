@@ -118,6 +118,9 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     dest = os.path.join(args.out, asset["name"])
     part = dest + ".part"
+    if os.path.exists(part):
+        os.remove(part)  # 不复用：truncate 预分配过，大小不等于完成度
+    open(part, "wb").close()
     n = args.threads if ranged else 1
     chunk = total // n
     segs = []
@@ -125,9 +128,6 @@ def main():
         s = i * chunk
         e = total - 1 if i == n - 1 else (i + 1) * chunk - 1
         segs.append([s, e, 0])
-
-    with open(part, "wb") as f:
-        f.truncate(total)
 
     lock = threading.Lock()
     done = [0]
@@ -137,43 +137,52 @@ def main():
         s, e, _ = segs[idx]
         pos = s
         tries = 0
-        while pos <= e and tries < 4:
+        while pos <= e:
+            if tries >= 4:
+                return
             try:
                 req = urllib.request.Request(
                     url, headers={"User-Agent": "curl/8.5.0", "Range": f"bytes={pos}-{e}"})
-                with opener(proxy).open(req, timeout=120) as r:
+                with opener(proxy).open(req, timeout=45) as r:
                     fh = open(part, "r+b")
-                    fh.seek(pos)
-                    while pos <= e:
-                        b = r.read(262144)
-                        if not b:
-                            break
-                        fh.write(b)
-                        pos += len(b)
-                        with lock:
-                            done[0] += len(b)
-                    fh.close()
+                    try:
+                        fh.seek(pos)
+                        while pos <= e:
+                            b = r.read(262144)
+                            if not b:
+                                break
+                            fh.write(b)
+                            pos += len(b)
+                            with lock:
+                                done[0] += len(b)
+                    finally:
+                        fh.close()
             except Exception as exc:  # noqa: BLE001
                 tries += 1
                 err.append(f"seg{idx}:{type(exc).__name__}")
-                time.sleep(1)
+                if pos > e:
+                    return
+                time.sleep(0.5)
 
     threads = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(n)]
     t0 = time.time()
     for t in threads:
         t.start()
     while any(t.is_alive() for t in threads):
-        time.sleep(1)
+        done_n = done[0]
         el = max(time.time() - t0, 0.001)
-        pct = done[0] * 100 // total
-        print(f"\r  {done[0] * 100 // total:3d}%  {done[0] // 1024}KB  {done[0] / el / 1024:.0f}KB/s",
-              end="", flush=True)
+        print(f"\r  {done_n * 100 // total:3d}%  {done_n // 1024}KB  "
+              f"{done_n / el / 1024:.0f}KB/s", end="", flush=True)
+        if done_n >= total:
+            break
+        time.sleep(0.5)
 
     for t in threads:
-        t.join()
+        t.join(timeout=3)
     print()
-    if done[0] != total:
-        raise SystemExit(f"不完整 {done[0]}/{total}  错误 {err[:4]}")
+    size = os.path.getsize(part)
+    if size != total:
+        raise SystemExit(f"不完整 {size}/{total}  错误 {err[:4]}")
     os.replace(part, dest)
     print(f"OK {dest} {os.path.getsize(dest)}B  用时 {time.time() - t0:.0f}s")
 
