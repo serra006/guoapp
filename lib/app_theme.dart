@@ -100,9 +100,9 @@ abstract final class AppTheme {
           borderSide: BorderSide.none,
         ),
       ),
-      // 10-foot 视距下默认焦点 overlay 几乎不可辨 → 用品牌暗底兜底。
-      focusColor: scheme.primaryContainer,
-      splashFactory: NoSplash.splashFactory,
+      // 注意：focusColor / splashFactory 这类「电视专属」的覆盖放在
+      // app_layout.dart 的 televisionTheme() 里，不要写在这里——这里是手机
+      // 与电视共用的基础主题，写在这里会把手机的点击水波纹一起关掉。
     );
   }
 

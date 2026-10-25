@@ -219,3 +219,48 @@ python scripts/build_android.py               # 手机版（默认 phone，全�
 绕过 `github.com`。配套 `tools/ci_status.py`、`tools/wait_ci.py` 查运行状态。
 副作用：远程 commit 对象本地不存在，本地 `main` 与 `origin/main` 在哈希层面分叉（内容一致），
 网络恢复后 `git fetch` 即可对齐。
+
+## 十一、两端版本线拆开 + 手机端回归修复（电视 1.0.0 / 手机 0.2.69，2026-10-25）
+
+用户确认 v0.2.68+75 的 TV 界面可用，并提出：**电视端与手机端分开更新，电视端定为正式版 1.0，
+手机端继续沿用 0.2.x**。
+
+### 1. 版本线拆分
+
+| 端 | 版本来源 | 当前值 | Release 标签 |
+| --- | --- | --- | --- |
+| 电视端 | `versions.json` 的 `tv` | `1.0.0` | `tv-v1.0.0` |
+| 手机端 | `pubspec.yaml` 的 `version` | `0.2.69` | `app-v0.2.69` |
+
+- 两端**共用** `pubspec.yaml` 的 `+N` 构建号 —— 它决定 versionCode，必须只增不减，
+  否则系统会拒绝覆盖安装。当前 `0.2.69+76`。
+- 电视端版本名由 `scripts/build_android.py` 传 `--build-name` 覆盖（Gradle 里的
+  `versionNameSuffix = "-tv"` 仍生效，最终为 `1.0.0-tv`）；手机端不传，直接用 pubspec。
+- **刻意不传 `--build-number`**：一旦两端各自从 1 起算，versionCode 会回退，覆盖安装必失败。
+- App 内「关于」显示的版本号改为编译期注入 `--dart-define=APP_VERSION=<flavor 版本>`，
+  不再把版本号写死在 `lib/app_layout.dart`（原来写死 `'0.2.68'`，电视端会显示错）。
+- CI 的 release job 从「一个 Release 装两端的包」改成 `publish()` 函数循环两次，
+  各发各的 Release、各生成各的 `SHA256SUMS.txt`；电视端后发，保证 Releases 页首条是电视版。
+
+**versionCode 已实测确认**：`--split-per-abi` 会给每个 ABI 叠不同基数 ——
+armeabi-v7a `+1000`、arm64-v8a `+2000`、x86_64 `+4000`，所以 0.2.68+75 的三个包分别是
+1075 / 2075 / 4075（不是之前以为的统一 1075）。因此 0.2.69+76 会得到 1076 / 2076 / 4076，
+链路单调递增，覆盖安装安全。
+
+### 2. 手机端被误伤的两处（本次修复）
+
+上一轮做 TV 皮肤时，有两处改动写在了**手机与电视共用的基础层**里：
+
+| 位置 | 问题 | 修复 |
+| --- | --- | --- |
+| `lib/app_theme.dart` 的 `_theme()` | `splashFactory: NoSplash.splashFactory` 写进基础主题 → 手机点任何东西都没有水波纹反馈 | 移到 `app_layout.dart` 的 `televisionTheme()`，只在电视生效 |
+| `lib/player_controls.dart` 进度条 / 音量条 | `trackHeight 3→8`、圆钮 `6→11`、热区 `14→22` 全局生效 → 手机上进度条粗一倍 | 按 `AppLayout.isTelevision(context)` 二选一，手机回到 3 / 6 / 14 |
+
+补了一条注释踩坑提醒：`focusColor` / `splashFactory` 这类电视专属覆盖不要写进共用基础主题。
+
+### 3. 确认手机端其余部分未受影响
+
+- 手机 flavor（`com.duanju.zhenguojian`）CI 构建一直全绿，主清单 `leanback required=false`，
+  手机可正常安装；与电视版不同包名，互不覆盖。
+- 主题浅色分支保持原值（`#FAF8F6` / 白色表面），只有深色分支换成新的近黑画布。
+- 首页导航、卡片比例、焦点样式都是 `television` 分支内改动，手机走原有 `InkWell` + 2:3 竖版海报。

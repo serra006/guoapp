@@ -4,7 +4,7 @@
 
 **Android TV 短剧应用 · 遥控器全流程 · 大屏重制界面**
 
-[![release](https://img.shields.io/badge/release-0.2.68%2B75-FF6B4A)](https://github.com/serra006/guoapp/releases/latest)
+[![release](https://img.shields.io/badge/release-1.0.0-FF6B4A)](https://github.com/serra006/guoapp/releases/latest)
 [![platform](https://img.shields.io/badge/platform-Android%20TV%20%7C%20LEANBACK-1B1E27)](https://github.com/serra006/guoapp/releases/latest)
 [![abi](https://img.shields.io/badge/ABI-arm64--v8a%20%7C%20armeabi--v7a%20%7C%20x86__64-1B1E27)](https://github.com/serra006/guoapp/releases/latest)
 [![build](https://img.shields.io/badge/build-GitHub%20Actions-2ea44f)](https://github.com/serra006/guoapp/actions)
@@ -17,11 +17,13 @@
 
 ![首页](design/preview-home.png)
 
-**当前状态**：首页 / 搜索 / 播放 / 返回 / 下载 / 追剧主流程已在 TCL Android 11 电视（armeabi-v7a）实机跑通；`0.2.68+75` 的界面重制已通过静态检查与 CI 全量构建。
+**当前状态**：首页 / 搜索 / 播放 / 返回 / 下载 / 追剧主流程已在 TCL Android 11 电视（armeabi-v7a）实机跑通；`1.0.0` 的界面重制已通过静态检查与 CI 全量构建。
+
+> **两端版本线各自独立**：电视端从 `1.0.0` 重新起版，手机端继续 `0.2.x`，两边各自发 Release、各自升级，互不影响。电视端版本号写在 `versions.json`，手机端沿用 `pubspec.yaml`。
 
 ---
 
-## 这一版（0.2.68+75）改了什么
+## 这一版（电视端 1.0.0）改了什么
 
 | 方向 | 内容 |
 | --- | --- |
@@ -152,6 +154,15 @@ python3 scripts/build_android.py --flavor tv --cn-mirrors      # 国内镜像
 | `zhenguojian-tv-android` | 电视版三架构 APK + SHA256 |
 | `zhenguojian-android` | 手机版三架构 APK + SHA256 |
 
+发布阶段把两端拆成两个 Release，各带各的附件与校验清单：
+
+| Release 标签 | 对应 | 版本来源 |
+| --- | --- | --- |
+| `tv-v1.0.0` | 电视版「真果TV」 | `versions.json` 的 `tv` |
+| `app-v0.2.x` | 手机版「真果鉴」 | `pubspec.yaml` 的 `version` |
+
+两端共用 `pubspec.yaml` 的 `+N` 构建号（决定 versionCode，必须只增不减，否则覆盖安装会被系统拒绝），但版本名各走各的：电视端由构建脚本传 `--build-name` 覆盖，手机端直接用 pubspec。
+
 正式发布使用同一签名并递增构建号，需在仓库 Secrets 配置 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`；未配置时回退生成 debug 签名预览包。
 
 本地不入库的 `android/key.properties`：
@@ -192,6 +203,7 @@ keyPassword=你的密码
 | `android` | 平台工程、TV flavor 与电视资源 |
 | `design` | TV 端设计稿、设计契约与逐屏预览图 |
 | `scripts`、`.github/workflows` | 构建、签名、验证、同步与版本快照 |
+| `versions.json` | 电视端独立版本号（手机端仍读 `pubspec.yaml`） |
 | `test`、`integration_test` | 自动化与设备回归 |
 | `TV-CHANGES.md` | 电视端改造全量变更日志（含每次踩坑与实测数据） |
 
@@ -201,6 +213,7 @@ keyPassword=你的密码
 
 | 版本 | 主题 |
 | --- | --- |
+| 电视 1.0.0 / 手机 0.2.69 | 两端版本线拆开；修掉手机上被误伤的点击水波纹与粗进度条 |
 | 0.2.68+75 | TV 端 UI 重设计 v1：深色画布 / 焦点三重可辨 / 横版卡片 / 浮动玻璃导航 |
 | 0.2.67+74 | 红果播放真正修好：移植播放专用签名，详情 / 目录 / 取流全部恢复 |
 | 0.2.66+73 | 内建七猫短剧源，红果不可用时可直接切换 |

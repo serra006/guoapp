@@ -1,5 +1,34 @@
 import base64
+import json
+import re
 from dataclasses import dataclass
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def pubspec_version() -> str:
+    """pubspec.yaml 里的版本名（不含 +构建号）。手机端沿用这条版本线。"""
+    text = (ROOT / 'pubspec.yaml').read_text(encoding='utf-8')
+    match = re.search(r'^version:\s*([\w.+-]+)\s*$', text, re.MULTILINE)
+    if not match:
+        raise SystemExit('pubspec.yaml 缺少合法版本号。')
+    return match.group(1).split('+')[0]
+
+
+def pubspec_build_number() -> str:
+    text = (ROOT / 'pubspec.yaml').read_text(encoding='utf-8')
+    match = re.search(r'^version:\s*[\w.+-]*\+(\d+)\s*$', text, re.MULTILINE)
+    return match.group(1) if match else '0'
+
+
+def tv_version() -> str:
+    """电视端独立版本线，写在 versions.json 的 "tv" 字段。"""
+    data = json.loads((ROOT / 'versions.json').read_text(encoding='utf-8'))
+    version = str(data.get('tv') or '').strip()
+    if not version:
+        raise SystemExit('versions.json 缺少 "tv" 版本号。')
+    return version
 
 
 @dataclass(frozen=True)
@@ -25,6 +54,16 @@ class BuildVariant:
         return f'{slug}-tv' if self.flavor == 'tv' else slug
 
     @property
+    def version(self):
+        """版本名。电视端独立走 versions.json（当前 1.0.x），手机端沿用 pubspec。"""
+        return tv_version() if self.flavor == 'tv' else pubspec_version()
+
+    @property
+    def build_number(self):
+        """构建号（= versionCode 基数）。两端共用一个计数器，保证各自单调递增。"""
+        return pubspec_build_number()
+
+    @property
     def arguments(self):
         arguments = ['--all-sources'] if self.all_sources else []
         if self.flavor == 'tv':
@@ -38,7 +77,17 @@ class BuildVariant:
         return [
             '--flavor', self.flavor,
             '--dart-define=ALL_SOURCES=' + str(self.all_sources).lower(),
+            '--dart-define=APP_VERSION=' + self.version,
         ] + (['--dart-define=TV_BUILD=true'] if self.flavor == 'tv' else [])
+
+    @property
+    def build_name_arguments(self):
+        """只有电视端覆盖版本名；手机端留给 pubspec。
+
+        刻意不传 --build-number：构建号统一由 pubspec 的 `+N` 决定，
+        否则电视端和手机端的 versionCode 会各自回到 1，覆盖安装直接失败。
+        """
+        return ['--build-name', self.version] if self.flavor == 'tv' else []
 
     @property
     def linker_flags(self):

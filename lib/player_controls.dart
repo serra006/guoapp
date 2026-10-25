@@ -499,14 +499,16 @@ class _PlayerControlsState extends State<PlayerControls> {
       color: Colors.white.withValues(alpha: .82),
       fontFeatures: const [FontFeature.tabularFigures()],
     );
+    // 粗进度条是电视专属：3m 外 4px 看不见。手机上沿用原来的细条，否则显得笨重。
+    final tv = AppLayout.isTelevision(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 0, 8, 2),
       child: SizedBox(
-        height: 36,
+        height: tv ? 36 : 28,
         child: Row(
           children: [
             SizedBox(
-              width: 52,
+              width: tv ? 52 : 43,
               child: Text(
                 formatPosition(_seekValue ?? position),
                 style: timeStyle,
@@ -517,16 +519,16 @@ class _PlayerControlsState extends State<PlayerControls> {
               child: SliderTheme(
                 data: SliderTheme.of(context).copyWith(
                   // TV 上 4px 以细看不清，进度条必须加粗到 8 且圆钮 22。
-                  trackHeight: 8,
+                  trackHeight: tv ? 8 : 3,
                   activeTrackColor: TvColor.brand,
                   inactiveTrackColor: Colors.white24,
                   secondaryActiveTrackColor: Colors.white54,
                   thumbColor: TvColor.brand,
-                  thumbShape: const RoundSliderThumbShape(
-                    enabledThumbRadius: 11,
+                  thumbShape: RoundSliderThumbShape(
+                    enabledThumbRadius: tv ? 11 : 6,
                   ),
-                  overlayShape: const RoundSliderOverlayShape(
-                    overlayRadius: 22,
+                  overlayShape: RoundSliderOverlayShape(
+                    overlayRadius: tv ? 22 : 14,
                   ),
                 ),
                 child: Slider(
@@ -858,6 +860,8 @@ class _PlayerControlsState extends State<PlayerControls> {
 
   Future<void> _openVolume(double initialVolume) async {
     var volume = initialVolume.clamp(0.0, 100.0);
+    // 音量条同样只在电视上加粗；手机上保持细条（这里是手机与电视共用的浮层）。
+    final tv = AppLayout.isTelevision(context);
     await showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
@@ -904,21 +908,21 @@ class _PlayerControlsState extends State<PlayerControls> {
                             ),
                           ),
                           SizedBox(
-                            width: 52,
-                            height: 128,
+                            width: tv ? 52 : 44,
+                            height: tv ? 128 : 112,
                             child: RotatedBox(
                               quarterTurns: -1,
                               child: SliderTheme(
                                 data: SliderTheme.of(context).copyWith(
-                                  trackHeight: 8,
+                                  trackHeight: tv ? 8 : 3,
                                   activeTrackColor: TvColor.brand,
                                   inactiveTrackColor: Colors.white24,
                                   thumbColor: TvColor.brand,
-                                  thumbShape: const RoundSliderThumbShape(
-                                    enabledThumbRadius: 11,
+                                  thumbShape: RoundSliderThumbShape(
+                                    enabledThumbRadius: tv ? 11 : 6,
                                   ),
-                                  overlayShape: const RoundSliderOverlayShape(
-                                    overlayRadius: 22,
+                                  overlayShape: RoundSliderOverlayShape(
+                                    overlayRadius: tv ? 22 : 14,
                                   ),
                                 ),
                                 child: Slider(

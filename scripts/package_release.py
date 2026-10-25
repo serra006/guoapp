@@ -1,6 +1,5 @@
 import argparse
 import hashlib
-import re
 import shutil
 import zipfile
 from pathlib import Path
@@ -14,10 +13,8 @@ parser.add_argument('--abi', action='append', choices=['arm64-v8a', 'armeabi-v7a
 add_variant_argument(parser)
 options = parser.parse_args()
 variant = BuildVariant(options.all_sources, options.flavor)
-match = re.search(r'^version:\s*([\w.+-]+)\s*$', (root / 'pubspec.yaml').read_text(encoding='utf-8'), re.MULTILINE)
-if not match:
-    raise SystemExit('pubspec.yaml 缺少合法版本号。')
-version = match.group(1)
+# 版本名按 flavor 取：电视端走 versions.json 的独立版本线，手机端沿用 pubspec。
+version = variant.version
 output = root / 'dist' / options.platform
 output.mkdir(parents=True, exist_ok=True)
 artifacts = []

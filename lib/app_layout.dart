@@ -8,7 +8,9 @@ import 'design_tokens.dart';
 
 export 'app_build.dart';
 
-const appVersion = '0.2.68';
+// 版本名由构建脚本按 flavor 注入：电视端走 versions.json（1.0.x），
+// 手机端沿用 pubspec.yaml。这里只是兜底值，不要把版本号写死进代码。
+const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '0.2.69');
 
 DateTime? _lastExitIntentAt;
 ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _lastExitSnackBar;
@@ -87,6 +89,8 @@ ThemeData televisionTheme(ThemeData theme) {
   // 焦点高亮统一由下方 ThemeData.focusColor 全局兜底
   return theme.copyWith(
     focusColor: dark ? TvColor.brandDim : colors.primaryContainer,
+    // 电视上没有触屏，水波纹只会干扰遥控器焦点反馈；手机端必须保留。
+    splashFactory: NoSplash.splashFactory,
     radioTheme: RadioThemeData(fillColor: WidgetStateProperty.resolveWith(
       (states) => states.contains(WidgetState.focused)
           ? colors.primary
