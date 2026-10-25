@@ -13,6 +13,7 @@ token 从 origin 的 remote url 里取，避免额外文件泄露密钥。
 import json
 import re
 import subprocess
+import urllib.error
 import urllib.request
 
 OWNER, REPO = "serra006", "guoapp"
@@ -59,7 +60,7 @@ def call(method, path, payload=None, accept="application/vnd.github+json", raw=F
     candidates = (
         [(_state["name"], _state["opener"])] if _state["opener"] else []
     ) + [pair for pair in _OPENERS if pair[0] != _state["name"]]
-    last = None
+    errors = []
     for name, opener in candidates:
         req = urllib.request.Request(API + path, data=data, method=method)
         req.add_header("Authorization", "Bearer " + TOKEN)
@@ -77,9 +78,17 @@ def call(method, path, payload=None, accept="application/vnd.github+json", raw=F
                 body = r.read().decode()
             _remember(name, opener)
             return json.loads(body) if body else {}
+        except urllib.error.HTTPError as exc:
+            # 4xx/5xx 是「服务端已经答复」，说明链路没问题，直接抛出真实原因
+            detail = ""
+            try:
+                detail = exc.read().decode()[:300]
+            except Exception:  # noqa: BLE001
+                pass
+            raise SystemExit(f"GitHub 拒绝 {method} {path}: HTTP {exc.code} {detail}")
         except Exception as exc:  # noqa: BLE001
-            last = exc
-    raise SystemExit(f"api.github.com 所有通道都失败: {last}")
+            errors.append(f"{name}: {type(exc).__name__}: {exc}")
+    raise SystemExit("api.github.com 所有通道都失败:\n  " + "\n  ".join(errors))
 
 
 def _remember(name, opener):
@@ -97,6 +106,10 @@ def post(path, payload=None, **kwargs):
 
 def patch(path, payload=None, **kwargs):
     return call("PATCH", path, payload, **kwargs)
+
+
+def put(path, payload=None, **kwargs):
+    return call("PUT", path, payload, **kwargs)
 
 
 def repo_path(suffix=""):

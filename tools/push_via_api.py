@@ -21,7 +21,7 @@ BRANCH = "main"
 # 仓库简介与话题：改这里再跑 `--repo` 即可同步到 GitHub。
 DESCRIPTION = (
     "真果TV · Android TV 短剧应用：10-foot 大屏重制界面，遥控器全流程，"
-    "焦点三重可辨；内置 12 个站源，解析与播放全部本地完成"
+    "焦点三重可辨；内置 12 个站源，解析与播放全部本地完成，无自建服务器"
 )
 TOPICS = [
     "android-tv",
@@ -72,10 +72,18 @@ def changed_files():
 
 
 def set_repo_meta():
-    """更新仓库简介与话题。需要 token 具备 Administration: write。"""
-    result = api.patch(api.repo_path(), {"description": DESCRIPTION, "topics": TOPICS})
+    """更新仓库简介与话题。
+
+    权限：fine-grained PAT 需要 **Administration: Read and write**
+    （classic PAT 需要 repo scope）。缺权限时报 403
+    `Resource not accessible by personal access token`。
+    注意两个字段必须走不同端点——`PATCH /repos/{owner}/{repo}` 不接受 topics，
+    带了也会被静默忽略，必须单独 `PUT /repos/{owner}/{repo}/topics`。
+    """
+    result = api.patch(api.repo_path(), {"description": DESCRIPTION})
     print(f"简介  = {result.get('description')}")
-    print(f"topics = {', '.join(result.get('topics') or [])}")
+    topics = api.put(api.repo_path("/topics"), {"names": TOPICS})
+    print(f"topics = {', '.join(topics.get('names') or [])}")
 
 
 def main():
