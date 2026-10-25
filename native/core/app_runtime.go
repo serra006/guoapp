@@ -73,6 +73,8 @@ type Downloader struct {
 	previewSessions       map[string]*huangguoPreviewSession
 	guipianMu             sync.Mutex
 	guipianLines          map[string]int
+	pinyinMu              sync.Mutex
+	pinyinCache           map[string]pinyinCandidateEntry
 }
 
 func defaultConfig() Config { return Config{MaxPagesPerSort: 50, PageSize: 30, Retries: 2} }

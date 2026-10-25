@@ -16,7 +16,10 @@ class SourceSite {
       id == 'guipian' ||
       id == 'hanxiaoquan' ||
       id == 'qimao';
-  bool get searchSuggestions => id == 'hongguo';
+  /// 搜索联想：电视遥控器只能打拼音，中文剧名必须靠联想下拉转出来。
+  /// 联想词库来自红果的联想接口（拼音检索，返回的是通用短剧词/剧名，
+  /// 与当前站源无关），所以在线搜索的站源都该开——不开就等于没有输入入口。
+  bool get searchSuggestions => onlineSearch;
   String get groupId => switch (id) {
     'huangguo-video' || 'huangguoai' || 'cloudfront' => 'huangguo',
     _ => id,

@@ -167,8 +167,13 @@ func (downloader *Downloader) fetchHongguoSearch(ctx context.Context, keyword st
 	if errors.Is(ctx.Err(), context.Canceled) {
 		return hongguoSearchEntry{}, ctx.Err()
 	}
-	if pageErr != nil && namesErr != nil || len(page.Dramas)+len(names) == 0 && (pageErr != nil || namesErr != nil) {
-		return hongguoSearchEntry{}, errors.Join(pageErr, namesErr)
+	// 注意：搜索页自 2026-10 起就是纯客户端渲染（React SPA），pageErr 恒为非 nil，
+	// 它已经不代表「搜索失败」，只代表「这一腿没有数据」。所以不能再用它参与
+	// 「是否报错」的判定——否则任何 0 命中的关键词都会被判成异常，界面弹
+	// 「暂时无法加载」，而实际只是没有匹配结果。
+	// 只有联想腿（唯一还有数据的腿）也失败、且两条腿都没捞到任何剧集，才算真失败。
+	if len(page.Dramas)+len(names) == 0 && namesErr != nil {
+		return hongguoSearchEntry{}, namesErr
 	}
 	entry := hongguoSearchEntry{Dramas: make([]Drama, 0, len(page.Dramas)+len(names)), Total: page.Total, Limited: page.Limited}
 	for _, batch := range [][]Drama{page.Dramas, names} {
@@ -194,14 +199,13 @@ func (downloader *Downloader) fetchHongguoSearch(ctx context.Context, keyword st
 		}
 		return false
 	})
-	if pageErr != nil {
-		// 搜索页已改客户端渲染，这条腿基本拿不到数据；只要联想结果够看就不打扰用户，
-		// 命中太小时才提示（否则每次搜索都挂一条警告，反而像故障）。
-		if len(entry.Dramas) < hongguoSearchQuietThreshold {
-			entry.Warning = "红果搜索页已改版，当前仅显示联想命中的剧集，可重试"
-		}
-	} else if namesErr != nil {
+	if namesErr != nil {
+		// 联想腿挂了＝搜索确实不完整，这时才值得提示。
 		entry.Warning = "红果名称检索暂不可用，结果可能缺少部分剧集，可重试"
+	} else if pageErr != nil && len(entry.Dramas) > 0 && len(entry.Dramas) < hongguoSearchQuietThreshold {
+		// 搜索页已改成客户端渲染，这条腿基本拿不到数据；只要联想结果够看就不打扰用户，
+		// 命中太小时才提示（否则每次搜索都挂一条警告，反而像故障）。
+		entry.Warning = "红果搜索页已改版，当前仅显示联想命中的剧集，可重试"
 	}
 	if seasonsLimited {
 		if entry.Warning != "" {
@@ -209,7 +213,9 @@ func (downloader *Downloader) fetchHongguoSearch(ctx context.Context, keyword st
 		}
 		entry.Warning += "部分季数暂未补齐，已保留当前结果，可重试"
 	}
-	entry.Limited = entry.Limited || pageErr != nil || namesErr != nil || seasonsLimited
+	// Limited 只在「有结果」时才置位：0 命中时挂着 Limited，上层会补一句
+	// 「已显示当前可获取的匹配结果」，再被 catalog_browser 当成失败抛出来。
+	entry.Limited = len(entry.Dramas) > 0 && (entry.Limited || pageErr != nil || namesErr != nil || seasonsLimited)
 	if entry.Total < len(entry.Dramas) {
 		entry.Total = len(entry.Dramas)
 	}

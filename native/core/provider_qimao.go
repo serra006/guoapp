@@ -501,6 +501,23 @@ func (d *Downloader) searchQimaoDramas(ctx context.Context, query string, page i
 		}
 		return nil, false, nil
 	}
+	// 七猫搜索只认汉字：电视遥控器只能打拼音，字母原样提交必然 0 条
+	// （搜 dushi 返回空、搜「都市」才有 10 条）。接口本身正常但结果为 0 时，
+	// 先把拼音转成中文候选词再搜一遍，否则遥控器用户等于搜不了东西。
+	if nativeErr == nil && isPinyinQuery(query) {
+		for _, word := range d.pinyinSearchCandidates(ctx, query, pinyinCandidateLimit) {
+			if word == query {
+				continue
+			}
+			found, foundMore, foundErr := d.searchQimaoNative(ctx, word, 1)
+			if foundErr == nil && len(found) > 0 {
+				return found, foundMore, nil
+			}
+			if ctx.Err() != nil {
+				break
+			}
+		}
+	}
 	fallbackItems, _, fallbackErr := d.searchQimaoFallback(ctx, query)
 	if len(fallbackItems) == 0 {
 		// 搜索接口本身出错、兜底也没捞到东西，才是真的失败（界面显示「暂时无法加载」）；
