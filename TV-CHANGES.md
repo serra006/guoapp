@@ -264,3 +264,68 @@ armeabi-v7a `+1000`、arm64-v8a `+2000`、x86_64 `+4000`，所以 0.2.68+75 的�
   手机可正常安装；与电视版不同包名，互不覆盖。
 - 主题浅色分支保持原值（`#FAF8F6` / 白色表面），只有深色分支换成新的近黑画布。
 - 首页导航、卡片比例、焦点样式都是 `television` 分支内改动，手机走原有 `InkWell` + 2:3 竖版海报。
+
+## 十二、红果全挂的根因：入口域名被按 SNI 阻断（TV 1.0.1 / 手机 0.2.70，2026-10-25）
+
+### 现象
+
+用户两台设备（电视 + 雷电模拟器）同时报：
+
+```
+Get "https://hongguoduanju.com/search/%E6%98%A5%E6%9A%A7?...":
+    read tcp ...->47.97.226.443:443: read: connection reset by peer
+Get "https://v.fengbao14.com/munaiyxnlng/.../index.m3u8":
+    read tcp ...->37.87.226.443:443: read: connection reset by peer
+```
+
+### 排查过程与结论
+
+**不是 App 的 bug，是网络层按 TLS SNI 精确阻断。** 关键实验（同一 IP、同一台机器、只改 SNI）：
+
+| 发出去的 SNI | TLS 握手 |
+| --- | --- |
+| `hongguoduanju.com` | ❌ 立刻被 RST |
+| `www.hongguoduanju.com` | ✅ 成功 |
+| `example.com` | ✅ 成功 |
+| 不发 SNI | ✅ 成功 |
+| `hongguoduanju.com.`（尾点） | ✅ 成功（但 **Go 会主动去掉尾点再发**，不可用） |
+
+服务器本身完好：假 SNI 拿到的 HTML 里含 `8662`（红果 aid），`/search` 路径返回 37 KB 正常结果。
+Go 的 `hostnameInSNI()` 按 RFC 6066 会裁掉尾点，所以尾点方案在 Go 里无效，只能改子域。
+
+**只有裸域名被封，红果其他链路全部正常：**
+
+| 域名 | 用途 | 状态 |
+| --- | --- | --- |
+| `hongguoduanju.com` | 首页 / 分区 / 搜索 | ❌ SNI 阻断 |
+| `api5-normal-sinfonlineb.fqnovel.com` | App 接口 | ✅ |
+| `novel.snssdk.com` | 媒体 | ✅ |
+| `djapi.999888456.xyz` | 播放 | ✅ |
+| `api-store/api-read.qmplaylet.com`、`cdn-vod-playlet.wtzw.com` | 七猫全链路 | ✅ |
+
+`v.fengbao14.com`（外部订阅源“三片”）是境外站，同一机制，与 App 无关。
+
+> 附带发现：本机 **UDP 53 被本地劫持**（向 223.5.5.5 用 UDP 查得 `1.1.1.1`，改用 TCP 才拿到 12 个真实 CDN 节点）。这解释了为什么模拟器解析到 `47.97.226.443`、宿主机解析到 `101.226.41.x` —— 不同解析路径给了不同节点。
+
+### 修复
+
+新增 `native/core/network_hongguo_sni.go`：只对 `hongguoduanju.com` 改用
+`www.hongguoduanju.com` 作为握手 SNI，**URL / Host 头 / 证书校验全部不变**（该服务器证书同样覆盖 www），
+其余域名原样透传，CDN 优选、代理、浏览器指纹链路都不受影响。
+
+- 伪装通道失败自动回落原通道，并进入 3 分钟冷却，避免每个请求白等一次超时；
+  冷却后自动重试，网络恢复即自行回到伪装通道。
+- 刻意**没有**用 `InsecureSkipVerify`，也没有降 TLS 版本。
+
+实测（`LIVE_NET_TEST=1 go test ./core/ -run HongguoSni`）：
+
+| 路径 | 真 SNI | 伪装 SNI |
+| --- | --- | --- |
+| `/` | ❌ RST | ✅ 200 / 155 KB |
+| `/category/real-drama` | ❌ RST | ✅ 200 / 255 KB |
+| `/category/ai-drama` | ❌ RST | ✅ 200 / 190 KB |
+| `/search/春晧` | ❌ RST | ✅ 200 / 37 KB |
+
+配套单测：`TestHongguoSniMaskRoutesOnlyBlockedHost`（只分流目标域名）、
+`TestHongguoSniMaskFallsBackWhenMaskedFails`（失败回落 + 冷却）。
+真实网络验证 `TestHongguoSniMaskLive` 默认 skip，需显式设 `LIVE_NET_TEST=1`。

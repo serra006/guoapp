@@ -266,7 +266,10 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 	transport.ResponseHeaderTimeout = 20 * time.Second
 	transport.Proxy = router.proxy
 	cdn := newCDNTransport(transport, newDNSResolver(transport))
-	d.client = &http.Client{Transport: newHuangguoBrowserTransport(cdn, d), Timeout: 45 * time.Second,
+	// 红果入口域名在部分网络会被按 SNI 阻断，这里只对该域名改用伪装 SNI 握手，
+	// 其余域名与 CDN 优选、代理、浏览器指纹链路完全不变。
+	browser := newHuangguoBrowserTransport(cdn, d)
+	d.client = &http.Client{Transport: newHongguoSniMaskTransport(browser, transport), Timeout: 45 * time.Second,
 		CheckRedirect: func(request *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return errors.New("站源重定向次数过多")
