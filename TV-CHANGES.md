@@ -532,3 +532,62 @@ warning），否则会走 `catalog_browser` 的 AppFailure 分支显示「暂时
 同步新增诊断脚本：`tools/diag_hongguo_suggest.py`（联想接口 / 拼音转写能力）、
 `tools/diag_hongguo_spa.py`（从 SPA 的 JS bundle 里挖接口路径）、
 `tools/diag_qimao_suggest.py`（七猫拼音支持 + 候选提示词端点）。
+
+---
+
+## 十八、新装后「头两分钟全体无法加载」的根因修复（TV 1.0.6 / 手机 0.2.75，2026-10-26）
+
+用户报：新装 App 后刚开始用，搜索、放片、连返回首页都容易「暂时无法加载」，
+过 2–3 分钟自己恢复正常。定位下来不是网络差，是**三个「带过期时间的惩罚状态」**
+把唯一可用的通路自己关掉了。
+
+### 1. 根因：把唯一通路当成「可选优化线路」处理
+
+红果入口 `hongguoduanju.com` 在用户网络里被按 SNI 精确阻断（TCP 能连、握手期被 RST），
+所以 `network_hongguo_sni.go` 给它开了一条「伪装 SNI 通道」（ClientHello 里发
+`www.hongguoduanju.com`）。这条通道是**唯一能通的路径**。
+
+旧逻辑：伪装通道失败一次 → `degradedUntil = now + 3min` → 回落 base。
+而 base 对这个域名本来就是死路，回落等于保证失败。于是：
+
+- 红果剧库、搜索页、**拼音联想**（遥控器打拼音转中文全靠它）、播放凭证、返回首页
+  全在同一个域名上 → 3 分钟里一起死；
+- 「2–3 分钟自愈」正是这个 3 分钟常量；
+- 「新装才明显」的机制：`hongguoSniMaskedDialer` 拨号超时 20s > catalog 请求 ctx 12s，
+  冷启动那次握手最容易被 ctx 砍掉，于是一次**请求超时**就被记成「通道失效」→ 锁 3 分钟。
+
+鬼片 CDN（`network_cdn_mask.go`）是同一个毛病，且更糟：这些域名 DNS 被劫持，
+回落 base 拿到的是 HTTP 200 + text/html 的反诈提示页，传输层看起来「成功」。
+
+### 2. 改动（`native/core/network_mask_state.go` 为共用状态机）
+
+1. **退避从分钟级改成秒级阶梯**：1s → 2s → 3s → 5s → 8s → 15s 封顶，
+   连续失败才逐级拉长，成功一次立刻归零。冷却期不再回落 base。
+2. **冷却所剩 ≤3s 时原地等完再试**（`maskTransparentWait`），
+   把瞬时抖动变成对用户不可见，而不是弹一次「暂时无法加载」。
+3. **本地取消不算通道故障**：前端每次切分类 / 重新搜索 / 退出都会
+   `cancelCatalog()`，旧实现把它也记成伪装通道故障 —— 切两下页面就能锁 3 分钟。
+   现在 `context.Canceled` 直接放过，不计数。
+4. **拨号超时 20s → 10s**，与 12s 的请求 ctx 留出余量，减少「超时被误判成通道失效」。
+5. **回落 base 只在探测确认可用时才发生**，且按域名类型分开判定：
+   页面类（红果入口，本来就是 HTML 站点）只看状态码 `maskBaseStatusUsable`；
+   媒体类（鬼片 CDN）额外排除 `text/html` `maskBaseMediaUsable`，避免把被劫持
+   拿到的反诈页当视频流往下传。
+6. **403 / 429 冷却同样改阶梯**（`backoffLadder`）：旧实现一律锁 60 秒，
+   首屏十几张封面里只要一张被 403，整个域名就被锁一分钟。
+   现在 5s 起步，连续被拒才升到 10/20/40/60 秒；`Retry-After` 只能加长不能缩短。
+7. **前端加「秒级失败自动重试一次」**（`home_screen.dart`）：
+   失败耗时 < 2s 说明请求很可能根本没发出去（冷却 / 退避快速失败），
+   等 1.5 秒自动重试一次，避免第一眼就是「暂时无法加载」；重试前记一条 Diary 便于定位。
+
+### 3. 新增回归测试（`network_hongguo_sni_test.go`）
+
+- `TestHongguoSniMaskRejectsFailedBase`：base 返回 403 时必须判失败、且不再重复回落；
+- `TestMaskBaseUsabilityChecks`：页面类/媒体类对 HTML 与 m3u8 的判定差异；
+- `TestHongguoSniMaskIgnoresCancel`：连续三次本地取消不触发冷却、不回落；
+- `TestHongguoSniMaskCooldownFailsFast`：冷却期快速失败（< 1s），错误文案带剩余秒数；
+- `TestBackoffLadderEscalates`：5/10/20/40/60 阶梯，Retry-After 只加长不缩短。
+
+顺带发出上一版压在工作区的两处小改动：`helpers.go` 把 `context canceled` /
+`context deadline exceeded` 翻成中文，`app_catalog_cache.go` 保存剧库的告警改走
+`nativeSaveError`，不再把裸英文串漏进界面。

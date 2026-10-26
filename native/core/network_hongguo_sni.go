@@ -22,8 +22,6 @@ import (
 const (
 	hongguoSniBlockedDomain = "hongguoduanju.com"
 	hongguoSniMaskedServer  = "www.hongguoduanju.com"
-	// 伪装通道失败后的冷却时间：期间直接走原通道，避免每次请求都多等一次超时。
-	hongguoSniCooldown = 3 * time.Minute
 )
 
 // hongguoSniMaskTransport 按目标域名分流：只有被封的那个域名走伪装 SNI 通道，
@@ -32,8 +30,8 @@ type hongguoSniMaskTransport struct {
 	base   http.RoundTripper
 	masked http.RoundTripper
 
-	mu            sync.Mutex
-	degradedUntil time.Time
+	mu    sync.Mutex
+	state maskChannelState
 }
 
 // newHongguoSniMaskTransport 用 plain（未包装的底层 transport）克隆出伪装通道，
@@ -50,7 +48,10 @@ func newHongguoSniMaskTransportWith(base, masked http.RoundTripper) *hongguoSniM
 }
 
 func hongguoSniMaskedDialer(base *tls.Config) func(context.Context, string, string) (net.Conn, error) {
-	dialer := &net.Dialer{Timeout: 20 * time.Second, KeepAlive: 30 * time.Second}
+	// 单次拨号上限压到 10s：请求侧 ctx 是 12s，留出握手余量。
+	// 之前写 20s，冷启动那次握手一旦慢下来就会被 12s 的 ctx 砍掉、又被记成
+	// 「通道故障」，从而连锁触发整段冷却。
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		raw, err := dialer.DialContext(ctx, network, addr)
 		if err != nil {
@@ -78,19 +79,57 @@ func (transport *hongguoSniMaskTransport) RoundTrip(request *http.Request) (*htt
 		!strings.EqualFold(request.URL.Hostname(), hongguoSniBlockedDomain) {
 		return transport.base.RoundTrip(request)
 	}
+
 	transport.mu.Lock()
-	degraded := time.Now().Before(transport.degradedUntil)
+	wait := transport.state.retryAfter()
+	useBase := transport.state.baseUsable
 	transport.mu.Unlock()
-	if !degraded {
-		response, err := transport.masked.RoundTrip(request)
-		if err == nil {
-			return response, nil
+
+	switch {
+	case useBase && wait > 0:
+		// 这个网络下原通道实测可用（没做 SNI 阻断），按老逻辑直接回落即可。
+		return transport.base.RoundTrip(request)
+	case !useBase && wait > maskTransparentWait:
+		// 冷却还长，快速失败：base 对这个域名同样是断的，回落只是把
+		// 「快失败」换成「慢失败」。错误里带出剩余秒数，前端可据此重试。
+		return nil, &maskChannelCooldownError{host: hongguoSniBlockedDomain, after: wait}
+	case !useBase && wait > 0:
+		// 只剩一两秒，原地等完再走伪装通道，别把一次瞬时抖动放大成一次失败。
+		if err := maskSleep(request.Context(), wait); err != nil {
+			return nil, err
 		}
-		// 伪装通道失效时进入冷却，避免后续每个请求都白等一次；
-		// 冷却结束后会自动再试一次，网络恢复即可自行回到伪装通道。
-		transport.mu.Lock()
-		transport.degradedUntil = time.Now().Add(hongguoSniCooldown)
-		transport.mu.Unlock()
 	}
-	return transport.base.RoundTrip(request)
+
+	response, err := transport.masked.RoundTrip(request)
+	if err == nil {
+		transport.mu.Lock()
+		transport.state.succeed()
+		transport.mu.Unlock()
+		return response, nil
+	}
+	if maskRequestAborted(err) {
+		// 本地取消（切分类 / 重新搜索 / 退出页面）不算通道故障。
+		return nil, err
+	}
+
+	transport.mu.Lock()
+	transport.state.fail()
+	// 只在第一次失败时探一次原通道：万一这个网络其实没做阻断，base 是能用的，
+	// 不能让伪装通道的偶发失败把唯一可用的路径也永久关掉。
+	probe := !transport.state.baseChecked
+	transport.state.baseChecked = true
+	transport.mu.Unlock()
+	if probe {
+		baseResponse, baseErr := transport.base.RoundTrip(request)
+		if baseErr == nil {
+			if maskBaseStatusUsable(baseResponse) {
+				transport.mu.Lock()
+				transport.state.baseUsable = true
+				transport.mu.Unlock()
+				return baseResponse, nil
+			}
+			baseResponse.Body.Close()
+		}
+	}
+	return nil, err
 }

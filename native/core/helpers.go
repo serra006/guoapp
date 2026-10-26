@@ -27,7 +27,7 @@ func (err redactedError) Error() string { return redactErrorString(err.cause.Err
 func (err redactedError) Unwrap() error { return err.cause }
 
 func redactErrorString(s string) string {
-	return rePublicURL.ReplaceAllStringFunc(s, func(raw string) string {
+	s = rePublicURL.ReplaceAllStringFunc(s, func(raw string) string {
 		u, err := url.Parse(raw)
 		if err != nil {
 			return "[无效 URL 已隐藏]"
@@ -46,6 +46,21 @@ func redactErrorString(s string) string {
 		}
 		return u.String()
 	})
+	// context 包的错误串会原样漏进界面（"context canceled" / "context deadline exceeded"），
+	// 中文界面里出现裸英文既看不懂也没法处理，统一翻成人话。
+	for raw, friendly := range contextErrorText {
+		if strings.TrimSpace(s) == raw {
+			return friendly
+		}
+		s = strings.ReplaceAll(s, raw, friendly)
+	}
+	return s
+}
+
+// contextErrorText context 包自带错误文案 → 界面可用的一句话。
+var contextErrorText = map[string]string{
+	"context canceled":          "请求已取消，请重试",
+	"context deadline exceeded": "请求超时，请重试",
 }
 
 func truncate(s string, n int) string {

@@ -21,6 +21,39 @@ type requestBackoff struct {
 	until  time.Time
 	status int
 	reason string
+	// strikes 是该域名连续被拒的次数，用来决定冷却长度。
+	strikes int
+}
+
+// backoffLadder 是「被站点拒绝（403 / 429 / Cloudflare 挑战）」后的冷却阶梯。
+//
+// 旧实现一律锁 60 秒：首屏本来就会并发打出十几个请求，只要有一张封面图被 403，
+// 整个域名就被锁一分钟，期间 acquire() 直接返回错误、请求根本不发出去 ——
+// 用户看到的就是「新装 App 后头一分钟怎么点都是暂时无法加载」。
+// 现在从 5 秒起步，只有连续被拒才逐级拉长到 60 秒，避免单次误伤扩大成整段不可用。
+var backoffLadder = []time.Duration{
+	5 * time.Second,
+	10 * time.Second,
+	20 * time.Second,
+	40 * time.Second,
+	60 * time.Second,
+}
+
+// backoffDelay 按连续被拒次数取冷却时长；站点给了 Retry-After 就以它为准。
+func backoffDelay(strikes int, response *http.Response) time.Duration {
+	index := min(max(strikes, 1), len(backoffLadder)) - 1
+	delay := backoffLadder[index]
+	if seconds, err := strconv.Atoi(response.Header.Get("Retry-After")); err == nil && seconds > 0 {
+		if retryAfter := time.Duration(seconds) * time.Second; retryAfter > delay {
+			delay = retryAfter
+		}
+	} else if until, err := http.ParseTime(response.Header.Get("Retry-After")); err == nil && time.Until(until) > delay {
+		delay = time.Until(until)
+	}
+	if delay > 30*time.Minute {
+		delay = 30 * time.Minute
+	}
+	return delay
 }
 
 func (backoff *requestBackoff) Error() string {
@@ -197,15 +230,6 @@ func (limiter *requestLimiter) observe(request *http.Request, response *http.Res
 }
 
 func (limiter *requestLimiter) observeBlock(request *http.Request, response *http.Response) {
-	delay := time.Minute
-	if seconds, err := strconv.Atoi(response.Header.Get("Retry-After")); err == nil && seconds > 0 {
-		delay = time.Duration(seconds) * time.Second
-	} else if until, err := http.ParseTime(response.Header.Get("Retry-After")); err == nil && time.Until(until) > 0 {
-		delay = time.Until(until)
-	}
-	if delay > 30*time.Minute {
-		delay = 30 * time.Minute
-	}
 	host := strings.ToLower(request.URL.Hostname())
 	limiter.mu.Lock()
 	backoffs := limiter.backoffs
@@ -213,7 +237,16 @@ func (limiter *requestLimiter) observeBlock(request *http.Request, response *htt
 
 		backoffs = limiter.backgroundBackoffs
 	}
-	backoffs[host] = &requestBackoff{host: host, until: time.Now().Add(delay), status: response.StatusCode}
+	strikes := 1
+	if previous := backoffs[host]; previous != nil {
+		strikes = previous.strikes + 1
+	}
+	backoffs[host] = &requestBackoff{
+		host:    host,
+		until:   time.Now().Add(backoffDelay(strikes, response)),
+		status:  response.StatusCode,
+		strikes: strikes,
+	}
 	limiter.notifyLocked()
 	limiter.mu.Unlock()
 }

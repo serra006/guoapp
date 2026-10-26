@@ -238,7 +238,9 @@ func (engine *nativeEngine) saveCatalogCache(source string, result *nativeCatalo
 	err := engine.writeCatalogDiskLocked()
 	result.saveError = err
 	if err != nil {
-		result.Warning = joinNativeWarnings(result.Warning, err.Error())
+		// 这里必须走 nativeSaveError：直接 err.Error() 会把底层英文串
+		// （甚至 "context canceled"）原样漏到界面上。
+		result.Warning = joinNativeWarnings(result.Warning, nativeSaveError("剧库", err).Error())
 		result.Fresh, result.HasMore = false, true
 	}
 	return err

@@ -23,20 +23,19 @@ import (
 // （例如 rstu6.com 的 IP 返回的是 *.bxgbnet.com 的证书），校验本来就不成立，
 // 所以这里必须跳过证书校验——否则连不上的前提下谈校验没有意义。
 //
-// 通道只在「主机名形如 v<数字>.<域>」时才启用，其余域名完全走原链路；
-// 掩码通道失败会记冷却，期间直接回落 base，不会给正常请求增加额外等待。
-var (
-	guipianMaskedCdnHost = regexp.MustCompile(`(?i)^v\d{1,3}\.[a-z0-9-]+\.(?:com|net|cc|io|xyz|top|vip|cn|tv|me)$`)
-	guipianMaskedCooldown = 3 * time.Minute
-)
+// 通道只在「主机名形如 v<数字>.<域>」时才启用，其余域名完全走原链路。
+// 失败退避按主机名单独计算，走秒级阶梯（见 network_mask_state.go）：
+// 这些域名的 base 会被 DNS 劫持到反诈页，回落等于拿到一页广告 HTML，
+// 所以冷却期宁可快速失败，也不要浪费时间回落到一条必然不可用的路上。
+var guipianMaskedCdnHost = regexp.MustCompile(`(?i)^v\d{1,3}\.[a-z0-9-]+\.(?:com|net|cc|io|xyz|top|vip|cn|tv|me)$`)
 
 type guipianCdnMaskTransport struct {
 	base     http.RoundTripper
 	masked   http.RoundTripper
 	resolver *dnsResolver
 
-	mu       sync.Mutex
-	degraded map[string]time.Time
+	mu    sync.Mutex
+	state map[string]*maskChannelState
 }
 
 func newGuipianCdnMaskTransport(base http.RoundTripper, plain *http.Transport, resolver *dnsResolver) http.RoundTripper {
@@ -50,13 +49,13 @@ func newGuipianCdnMaskTransport(base http.RoundTripper, plain *http.Transport, r
 	masked.DialTLSContext = guipianMaskedDialer(resolver, config)
 	return &guipianCdnMaskTransport{
 		base: base, masked: masked, resolver: resolver,
-		degraded: map[string]time.Time{},
+		state: map[string]*maskChannelState{},
 	}
 }
 
 // guipianMaskedDialer 先用真实 IP 建 TCP，再用裸域 SNI 完成握手。
 func guipianMaskedDialer(resolver *dnsResolver, base *tls.Config) func(context.Context, string, string) (net.Conn, error) {
-	dialer := &net.Dialer{Timeout: 12 * time.Second, KeepAlive: 30 * time.Second}
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
@@ -112,6 +111,19 @@ func guipianMaskedServerName(host string) string {
 	return ""
 }
 
+// guipianChannelState 取（或建）某个 CDN 主机名的通道状态，调用方需持有 mu。
+func (transport *guipianCdnMaskTransport) channelStateLocked(host string) *maskChannelState {
+	state := transport.state[host]
+	if state == nil {
+		if len(transport.state) >= 64 {
+			transport.state = map[string]*maskChannelState{}
+		}
+		state = &maskChannelState{}
+		transport.state[host] = state
+	}
+	return state
+}
+
 func (transport *guipianCdnMaskTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	if request == nil || request.URL == nil {
 		return transport.base.RoundTrip(request)
@@ -120,21 +132,53 @@ func (transport *guipianCdnMaskTransport) RoundTrip(request *http.Request) (*htt
 	if guipianMaskedServerName(host) == "" {
 		return transport.base.RoundTrip(request)
 	}
+
 	transport.mu.Lock()
-	until, degraded := transport.degraded[host]
+	state := transport.channelStateLocked(host)
+	wait := state.retryAfter()
+	useBase := state.baseUsable
 	transport.mu.Unlock()
-	if degraded && time.Now().Before(until) {
+
+	switch {
+	case useBase && wait > 0:
 		return transport.base.RoundTrip(request)
+	case !useBase && wait > maskTransparentWait:
+		return nil, &maskChannelCooldownError{host: host, after: wait}
+	case !useBase && wait > 0:
+		if err := maskSleep(request.Context(), wait); err != nil {
+			return nil, err
+		}
 	}
+
 	response, err := transport.masked.RoundTrip(request)
 	if err == nil {
+		transport.mu.Lock()
+		state.succeed()
+		transport.mu.Unlock()
 		return response, nil
 	}
-	transport.mu.Lock()
-	if len(transport.degraded) >= 64 {
-		transport.degraded = map[string]time.Time{}
+	if maskRequestAborted(err) {
+		return nil, err
 	}
-	transport.degraded[host] = time.Now().Add(guipianMaskedCooldown)
+
+	transport.mu.Lock()
+	state.fail()
+	probe := !state.baseChecked
+	state.baseChecked = true
 	transport.mu.Unlock()
-	return transport.base.RoundTrip(request)
+	if probe {
+		// 一次性的原通道探测，且必须校验内容不是反诈页 —— 这些域名的 base 在
+		// 被劫持时会返回 HTTP 200 的 text/html，光看状态码会误判成「可用」。
+		baseResponse, baseErr := transport.base.RoundTrip(request)
+		if baseErr == nil {
+			if maskBaseMediaUsable(baseResponse) {
+				transport.mu.Lock()
+				state.baseUsable = true
+				transport.mu.Unlock()
+				return baseResponse, nil
+			}
+			baseResponse.Body.Close()
+		}
+	}
+	return nil, err
 }

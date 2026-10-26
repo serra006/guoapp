@@ -518,6 +518,7 @@ class _HomeScreenState extends State<HomeScreen> {
     bool useCache = false,
     bool force = false,
     bool cacheOnly = false,
+    bool retried = false,
   }) async {
     if (_showRecommendations) return;
     if (more && (_loading || _loadingMore || !_hasMore)) return;
@@ -560,6 +561,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     try {
+      final startedAt = DateTime.now();
       final result = await _browser.load(
         group,
         category: _category,
@@ -573,6 +575,27 @@ class _HomeScreenState extends State<HomeScreen> {
       accept(result);
     } catch (error) {
       if (!mounted || generation != _generation) return;
+      // 秒级失败多半不是「真的没网」，而是站源通道刚进冷却 / 域名正在退避：
+      // 这种失败重试成本极低（请求根本没发出去）。自动等一小会儿再试一次，
+      // 避免用户刚装好 App、或刚切完站源时第一眼就看到「暂时无法加载」。
+      final quickFailure =
+          DateTime.now().difference(startedAt) < const Duration(seconds: 2);
+      if (quickFailure && !retried && !more && !cacheOnly) {
+        DiaryService.add(
+          '[Search] ${query.isEmpty ? group.name : query} 秒级失败，1.5 秒后自动重试：$error',
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 1500));
+        if (!mounted || generation != _generation) return;
+        if (!_loading) {
+          setState(() {
+            _loading = true;
+            _failed = false;
+            _error = null;
+          });
+        }
+        await _load(force: true, retried: true);
+        return;
+      }
       DiaryService.add(
         '[Search] ${query.isEmpty ? group.name : query} 失败：$error',
       );
