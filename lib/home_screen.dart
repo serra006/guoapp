@@ -560,8 +560,8 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
 
+    final startedAt = DateTime.now();
     try {
-      final startedAt = DateTime.now();
       final result = await _browser.load(
         group,
         category: _category,
