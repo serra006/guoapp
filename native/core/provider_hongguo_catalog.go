@@ -98,11 +98,11 @@ func (downloader *Downloader) fetchHongguoAppCatalogCategory(ctx context.Context
 	var failures []error
 	for round := 0; round < roundLimit; round++ {
 		active := false
-	for index, genre := range genres {
-		scan := &scans[index]
-		if scan.done || !scan.head && scan.pages >= scanLimits[index] {
-			continue
-		}
+		for index, genre := range genres {
+			scan := &scans[index]
+			if scan.done || !scan.head && scan.pages >= scanLimits[index] {
+				continue
+			}
 			if err := ctx.Err(); err != nil {
 				return dramas, err
 			}

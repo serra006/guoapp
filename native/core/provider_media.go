@@ -47,6 +47,8 @@ func (d *Downloader) providerBaseURL(source string) string {
 		configured, fallback = d.cfg.HanxiaoquanURL, hanxiaoquanSiteBaseURL
 	case sourceQimao:
 		fallback = qimaoSiteBaseURL
+	case sourceBofeng:
+		fallback = bofengAPIBaseURL
 	default:
 		fallback = "https://d2pypzndaqisk.cloudfront.net"
 	}
@@ -83,6 +85,11 @@ func providerSourceForURL(raw string) string {
 		return sourceGuipian
 	case host == "jennyhow.com" || host == "www.jennyhow.com":
 		return sourceHanxiaoquan
+	// 只认采集接口所在的域名。播放/封面主机不固定（已见 bfeng10.com、c1.rrcdnbf2.com、
+	// p.bfvp26.com），它们不能算本站源：一旦被识别成 sourceBofeng，
+	// providerURLCandidates 会把媒体地址改写成接口域名，播放直接报废。
+	case host == "bfzyapi.com" || host == "www.bfzyapi.com":
+		return sourceBofeng
 	default:
 		return ""
 	}
@@ -146,6 +153,9 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 	}
 	if chapter.Source == sourceQimao {
 		return d.resolveQimaoMedia(ctx, task)
+	}
+	if chapter.Source == sourceBofeng {
+		return d.resolveBofengMedia(ctx, task)
 	}
 	if strings.HasPrefix(chapter.VideoURL, "hongguo-cenc://") {
 		return d.resolveHongguoMedia(ctx, task)

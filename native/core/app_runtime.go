@@ -595,6 +595,18 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		// 挂了 warning 会走 catalog_browser 的 AppFailure 分支，界面变成「暂时无法加载」。
 		return result, nil
 	}
+	if query != "" && source == sourceBofeng {
+		items, more, err := d.fetchBofengCatalogPage(ctx, page, "", query)
+		if err != nil {
+			return result, err
+		}
+		for _, drama := range items {
+			result.Items = append(result.Items, nativeNormalize(drama))
+		}
+		result.HasMore = more
+		// 与七猫同理：暴风资源搜不到时是正常空结果，挂 warning 会被界面当成加载失败。
+		return result, nil
+	}
 	if query != "" && (source == sourceYeguo || source == sourceDSD) {
 		var items []Drama
 		var more bool
@@ -693,6 +705,8 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		items, result.HasMore, err = d.fetchHanxiaoquanCatalogPage(ctx, page, category, "")
 	case sourceQimao:
 		items, result.HasMore, err = d.fetchQimaoCatalogPage(ctx, page, category, "")
+	case sourceBofeng:
+		items, result.HasMore, err = d.fetchBofengCatalogPage(ctx, page, category, "")
 	case sourceHuangguoVideo:
 		address := fmt.Sprintf("%s/videos?page=%d", d.providerBaseURL(source), page)
 		if category != "" {
@@ -710,7 +724,7 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 	if err != nil && len(items) == 0 {
 		return result, err
 	}
-	if len(items) == 0 && page == 1 && source != sourceHuangju && source != sourceYeguo && source != sourceDSD && source != sourceSorani && source != sourceGuipian && source != sourceHanxiaoquan && source != sourceQimao {
+	if len(items) == 0 && page == 1 && source != sourceHuangju && source != sourceYeguo && source != sourceDSD && source != sourceSorani && source != sourceGuipian && source != sourceHanxiaoquan && source != sourceQimao && source != sourceBofeng {
 		return result, errors.New("站源暂未返回剧集，请稍后刷新")
 	}
 	if err != nil {
@@ -758,6 +772,8 @@ func (engine *nativeEngine) nativeDetail(ctx context.Context, drama nativeDrama)
 		raw, chapters, err = engine.downloader.fetchHanxiaoquanDetail(ctx, sourceID)
 	case sourceQimao:
 		raw, chapters, err = engine.downloader.fetchQimaoDetail(ctx, sourceID)
+	case sourceBofeng:
+		raw, chapters, err = engine.downloader.fetchBofengDetail(ctx, sourceID)
 	default:
 		title, chapters, err = engine.downloader.GetHuangguoChapters(ctx, source, sourceID)
 	}
@@ -785,7 +801,15 @@ func (engine *nativeEngine) nativeDetail(ctx context.Context, drama nativeDrama)
 			}
 		}
 	}
-	drama.Source, drama.SourceID, drama.Episodes = source, sourceID, len(chapters)
+	drama.Source, drama.SourceID = source, sourceID
+	// 集数默认取实际章节数。但暴风源探测播放列表失败时 chapters 只有 1 条，
+	// 那是「未知」而不是「1 集」——无条件覆盖会把一部 66 集的短剧永久写成 1 集
+	// （saveDetailMetadata 会落盘，缓存期内刷新也救不回来）。这时保留上面
+	// mergeNativeDrama 得到的结果（上次已知集数 / vod_remarks 里的声明集数），
+	// 下次进详情会重新探测，从而自愈。
+	if !raw.EpisodeCountUnknown {
+		drama.Episodes = len(chapters)
+	}
 	if source == sourceHuangju || source == sourceYeguo || source == sourceQimao {
 		drama.Episodes = max(drama.Episodes, nativeNormalize(raw).Episodes)
 	}

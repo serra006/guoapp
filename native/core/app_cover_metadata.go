@@ -61,6 +61,10 @@ func (d *Downloader) nativeCoverAddress(ctx context.Context, drama nativeDrama) 
 	case sourceQimao:
 		fresh, _, err := d.fetchQimaoDetail(ctx, id)
 		return nativeNormalize(fresh).Cover, err
+	case sourceBofeng:
+		// 走轻量路径：只读 vod_pic，不触发整剧单流的 m3u8 探测。
+		// 列表页会批量补封面，走 fetchBofengDetail 等于每个封面多下一次 60KB 播放列表。
+		return d.fetchBofengCover(ctx, id)
 	case sourceCloudFront:
 		if !rankingSourceID.MatchString(id) {
 			return "", errors.New("无效的黄果剧集 ID")

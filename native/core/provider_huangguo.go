@@ -32,6 +32,7 @@ const (
 	sourceGuipian       = "guipian"
 	sourceHanxiaoquan   = "hanxiaoquan"
 	sourceQimao         = "qimao"
+	sourceBofeng        = "bofeng"
 
 	providerMaxBodyBytes = 20 * 1024 * 1024
 	providerTimeout      = 12 * time.Second
@@ -92,7 +93,7 @@ func splitProviderDramaID(id string) (source, sourceID string, ok bool) {
 
 func isHuangguoProviderSource(source string) bool {
 	switch canonicalProviderSource(source) {
-	case sourceHuangguoAI, sourceHuangguoVideo, sourceHuangdou, sourceHongguo, sourceHuangju, sourceYeguo, sourceDSD, sourceCloudFront, sourceSorani, sourceGuipian, sourceHanxiaoquan, sourceQimao:
+	case sourceHuangguoAI, sourceHuangguoVideo, sourceHuangdou, sourceHongguo, sourceHuangju, sourceYeguo, sourceDSD, sourceCloudFront, sourceSorani, sourceGuipian, sourceHanxiaoquan, sourceQimao, sourceBofeng:
 		return true
 	default:
 		return false
@@ -125,6 +126,8 @@ func canonicalProviderSource(source string) string {
 		return sourceHanxiaoquan
 	case "qimao", "qmplaylet", "qmplaylet.com", "www.qmplaylet.com", "api-store.qmplaylet.com":
 		return sourceQimao
+	case "bofeng", "bfzyapi.com", "www.bfzyapi.com":
+		return sourceBofeng
 	default:
 		return strings.TrimSpace(source)
 	}
@@ -245,6 +248,9 @@ func (d *Downloader) GetHuangguoChapters(ctx context.Context, source, sourceID s
 		return drama.DisplayTitle(), chapters, err
 	case sourceQimao:
 		drama, chapters, err := d.fetchQimaoDetail(ctx, sourceID)
+		return drama.DisplayTitle(), chapters, err
+	case sourceBofeng:
+		drama, chapters, err := d.fetchBofengDetail(ctx, sourceID)
 		return drama.DisplayTitle(), chapters, err
 	case sourceCloudFront:
 		return d.fetchLegacyChapters(ctx, sourceID)

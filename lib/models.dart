@@ -15,7 +15,8 @@ class SourceSite {
       id == 'sorani' ||
       id == 'guipian' ||
       id == 'hanxiaoquan' ||
-      id == 'qimao';
+      id == 'qimao' ||
+      id == 'bofeng';
   /// 搜索联想：电视遥控器只能打拼音，中文剧名必须靠联想下拉转出来。
   /// 联想词库来自红果的联想接口（拼音检索，返回的是通用短剧词/剧名，
   /// 与当前站源无关），所以在线搜索的站源都该开——不开就等于没有输入入口。
@@ -42,9 +43,17 @@ class SourceSite {
     '韩剧 · 韩国电影 · 综艺动漫',
   );
   static const qimao = SourceSite('qimao', '七猫', '短剧 · 分类 · 搜索');
+  static const bofeng = SourceSite('bofeng', '暴风', '短剧 · 分类 · 搜索');
 
-  /// 默认可见的站源：七猫、红果、韩小圈、鬼片网、青空次元。
-  static const primaryValues = [qimao, hongguo, hanxiaoquan, guipian, sorani];
+  /// 默认可见的站源：七猫、暴风、红果、韩小圈、鬼片网、青空次元。
+  static const primaryValues = [
+    qimao,
+    bofeng,
+    hongguo,
+    hanxiaoquan,
+    guipian,
+    sorani,
+  ];
 
   /// 敏感站源：默认隐藏，输入解锁密码后才显示。
   static const restrictedValues = [

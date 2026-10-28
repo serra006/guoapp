@@ -71,6 +71,10 @@ func validNativeCategory(source, category string) bool {
 		return validHanxiaoquanCategory(category)
 	case sourceQimao:
 		return validQimaoCategory(category)
+	case sourceBofeng:
+		// 暴风资源的分类就是上游苹果 CMS 的 type_id（纯数字），分类表是动态返回的，
+		// 这里只做格式校验，避免把任意字符串塞进缓存键和 t= 参数。
+		return validBofengCategory(category)
 	}
 	return false
 }
@@ -140,6 +144,12 @@ func (engine *nativeEngine) nativeCategories(ctx context.Context, source string,
 	case sourceQimao:
 		var categories []nativeCategory
 		categories, err = d.fetchQimaoCategories(ctx)
+		if err == nil {
+			all = append(all, categories...)
+		}
+	case sourceBofeng:
+		var categories []nativeCategory
+		categories, err = d.fetchBofengCategories(ctx)
 		if err == nil {
 			all = append(all, categories...)
 		}

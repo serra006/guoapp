@@ -52,6 +52,12 @@ type Drama struct {
 	Tags              []string           `json:"tags,omitempty"`
 	ReleaseStatus     string             `json:"releaseStatus,omitempty"`
 	SortMetadata      *sortMetadataState `json:"sortMetadata,omitempty"`
+
+	// EpisodeCountUnknown 标记「这一次拿到的集数不可信」：暴风源探测整剧单流的播放列表
+	// 失败时置位（bfeng10.com 有 4 个 IP、上游常态性抖动，这条降级路径会被反复触发）。
+	// json:"-" 保证它既不落盘也不传给前端，只用于 nativeDetail 判断要不要用本次集数
+	// 覆盖缓存——不能让一次 CDN 抖动把 66 集写成 1 集。
+	EpisodeCountUnknown bool `json:"-"`
 }
 
 func (d Drama) DisplayTitle() string {
