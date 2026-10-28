@@ -319,4 +319,4 @@ jobs:
             "手机 / 平板版 ${phone_version}（包名 com.duanju.zhenguojian，版本线独立于电视端）。功能与电视端同源，界面按触屏布局。"
           # 电视端后发，保证 Releases 页首条是电视版。
           publish zhenguojian-tv-android "$tv_version" "tv-v$tv_version" "真果TV ${tv_version}" \
-            "电视端正式版 ${tv_version}（包名 com.duanju.zhenguo.tv，独立版本线）。遥控器全流程、10-foot 界面、内置 12 个站源。"
+            "电视端正式版 ${tv_version}（包名 com.duanju.zhenguo.tv，独立版本线）。遥控器全流程、10-foot 界面、内置 13 个站源。"
