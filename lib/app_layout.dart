@@ -212,6 +212,13 @@ class AppDevice {
       await channel.invokeMethod('resetBrightness');
     } catch (_) {}
   }
+
+  static Future<void> setKeepScreenOn(bool enabled) async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await channel.invokeMethod('setKeepScreenOn', {'enabled': enabled});
+    } catch (_) {}
+  }
 }
 
 class AppLayout extends InheritedWidget {

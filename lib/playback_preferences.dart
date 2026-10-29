@@ -9,6 +9,7 @@ class PlaybackPreferences {
     this.autoAdvance = true,
     this.danmaku = true,
     this.preload = true,
+    this.keepScreenOn = true,
     this.enhancement = const VideoEnhancementPreferences(),
   });
 
@@ -17,6 +18,7 @@ class PlaybackPreferences {
   final bool autoAdvance;
   final bool danmaku;
   final bool preload;
+  final bool keepScreenOn;
   final VideoEnhancementPreferences enhancement;
 
   PlaybackPreferences copyWith({
@@ -25,6 +27,7 @@ class PlaybackPreferences {
     bool? autoAdvance,
     bool? danmaku,
     bool? preload,
+    bool? keepScreenOn,
     VideoEnhancementPreferences? enhancement,
   }) => PlaybackPreferences(
     speed: speed ?? this.speed,
@@ -32,6 +35,7 @@ class PlaybackPreferences {
     autoAdvance: autoAdvance ?? this.autoAdvance,
     danmaku: danmaku ?? this.danmaku,
     preload: preload ?? this.preload,
+    keepScreenOn: keepScreenOn ?? this.keepScreenOn,
     enhancement: enhancement ?? this.enhancement,
   );
 
@@ -41,6 +45,7 @@ class PlaybackPreferences {
     'autoAdvance': autoAdvance,
     'danmaku': danmaku,
     'preload': preload,
+    'keepScreenOn': keepScreenOn,
     'enhancement': enhancement.toJson(),
   };
 
@@ -50,6 +55,9 @@ class PlaybackPreferences {
     final autoAdvance = value['autoAdvance'] as bool? ?? true;
     final danmaku = value['danmaku'] as bool? ?? true;
     final preload = value['preload'] as bool? ?? true;
+    // 新增字段不参与有效性校验：老备份没有这个键时必须回落到默认开启，
+    // 否则恢复旧备份会因为缺少字段直接抛异常。
+    final keepScreenOn = value['keepScreenOn'] as bool? ?? true;
     if (!playbackSpeeds.contains(speed) || quality < 0 || quality > 4320) {
       throw const FormatException('播放偏好无效');
     }
@@ -59,6 +67,7 @@ class PlaybackPreferences {
       autoAdvance: autoAdvance,
       danmaku: danmaku,
       preload: preload,
+      keepScreenOn: keepScreenOn,
       enhancement: VideoEnhancementPreferences.fromJson(value['enhancement']),
     );
   }

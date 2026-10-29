@@ -76,6 +76,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Widget _keepScreenOnTile(BuildContext context) {
+    final keepScreenOn = widget.store.playbackPreferences.keepScreenOn;
+    void toggle() {
+      final preferences = widget.store.playbackPreferences;
+      saveUserChange(
+        context,
+        () => widget.store.setPlaybackPreferences(
+          preferences.copyWith(keepScreenOn: !preferences.keepScreenOn),
+        ),
+      );
+    }
+
+    return TvTile(
+      key: const ValueKey('keep-screen-on'),
+      leading: const Icon(Icons.screen_lock_portrait_outlined),
+      title: const Text('播放时保持屏幕常亮'),
+      subtitle: Text(keepScreenOn ? '播放时不自动息屏，避免中断' : '跟随系统休眠设置'),
+      trailing: Switch(value: keepScreenOn, onChanged: (_) => toggle()),
+      onTap: toggle,
+    );
+  }
+
   Future<void> _backup(bool restore) async {
     setState(() {
       _busy = true;
@@ -179,6 +201,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: _chooseTheme,
                 ),
+                if (!AppDevice.isTv && Platform.isAndroid)
+                  _keepScreenOnTile(context),
                 TvTile(
                   leading: const Icon(Icons.people_outline),
                   title: const Text('用户管理'),

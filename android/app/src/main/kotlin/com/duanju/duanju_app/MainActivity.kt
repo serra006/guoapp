@@ -204,6 +204,17 @@ class MainActivity : FlutterActivity() {
                             window.attributes = lp
                             result.success(true)
                         }
+                        "setKeepScreenOn" -> {
+                            val enabled = call.argument<Boolean>("enabled") ?: false
+                            runOnUiThread {
+                                if (enabled) {
+                                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                                } else {
+                                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                                }
+                            }
+                            result.success(null)
+                        }
                         "openExternalPlayer" -> {
                             val url = call.argument<String>("url")
                             val title = call.argument<String>("title") ?: "短剧"

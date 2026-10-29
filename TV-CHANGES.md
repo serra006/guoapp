@@ -763,3 +763,117 @@ byterange 语义对不上。
   最好窗口 `p ≈ 0.42` 时 3 次就有 ≈ **80%**。区间跨度这么大，说明它是运气不是能力，别当承诺。
 - 短剧分类下的播放已验证（`含_ShortDrama_` 的 m3u8 全部可达），**长剧/电影按上面的口径验收**：
   能播、偶尔要隔几分钟再点，属源站网络层问题。
+
+## 二十、手机播放防息屏（TV 1.0.8 / 手机 0.2.77，2026-10-29）
+
+### 1. 现象
+
+手机/平板播放短剧时，只要系统按超时息屏，播放就停。用户原话：「设置里少了息屏相关的设置，
+会随着手机息屏就停了，应该是播放视频时不会息屏。」
+
+### 2. 根因不是「CPU 休眠」，是项目自己主动暂停
+
+最开始容易以为是 Android 息屏后 CPU 降频导致解码中断。查下来是两段链路，第二段在项目自己手里：
+
+1. 屏幕关闭 → Activity 走 `onPause` → Flutter 收到 `AppLifecycleState.inactive/paused`；
+2. `player_screen.dart` 的 `didChangeAppLifecycleState` → `_applyLifecycleVisibility()`，
+   当「不是 resumed 且不是画中画」时执行 `_playIntent = false` + `_player.pause()` + `saveProgress(flush)`。
+
+也就是说**播放器是被自己的生命周期逻辑停掉的**，不是解码器挂了。所以解法不是「息屏后想办法续播」，
+而是让屏幕不要关：从源头不触发这条链。
+
+### 3. 实现：`FLAG_KEEP_SCREEN_ON`，零新依赖
+
+没有引入 `wakelock_plus` 之类的包（会动 pubspec、CI 要重新拉依赖，而项目已有 `duanju/device`
+通道，够用）。五处改动：
+
+| 文件 | 改动 |
+|---|---|
+| `MainActivity.kt` | `duanju/device` 通道新增 `setKeepScreenOn`，`window.addFlags/clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)` |
+| `app_layout.dart` | `AppDevice.setKeepScreenOn(bool)`，风格对齐已有的 `setBrightness`（吞异常不抛） |
+| `playback_preferences.dart` | 新增 `keepScreenOn`，默认 `true` |
+| `player_screen.dart` | `_syncKeepScreenOn()`：进页面开、`dispose` 关、`_applyLifecycleVisibility` 末尾收口 |
+| `settings_screen.dart` | 设置项「播放时保持屏幕常亮」+ 开关 |
+
+关键性质：该标志是**窗口级**的，不需要任何权限（清单里那条 `WAKE_LOCK` 是别的功能用），
+窗口销毁/进程退出即消失，不可能泄漏到其它应用、也不可能让整机永久常亮。最坏情况只是「没生效」。
+
+### 4. 为什么 TV 不需要
+
+- 电视接常电，系统没有「息屏超时」这回事；
+- Android TV 走「长时间无操作进待机」，不是手机那种息屏即挂起的语义；
+- 项目已有硬件判据 `AppDevice.isTv`（原生 `isTelevisionDevice()` 覆盖 leanback / 无触摸屏 /
+  DPAD 遥控器这些特征），直接短路即可。
+
+落实成双保险：`_syncKeepScreenOn()` 里 `!AppDevice.isTv` 短路（TV 上**零次** Dart→原生调用），
+设置页 `if (!AppDevice.isTv && Platform.isAndroid)` 不渲染该项（TV 的 children 列表与改动前完全一致，
+不会多出一行）。加 `Platform.isAndroid` 是因为非 Android 平台 `setKeepScreenOn` 直接 return，
+不收敛的话 iOS 上会是个死开关。
+
+**注意这里踩过一个口径不一致**：设置项最初的显隐条件是 `AppLayout.isTelevision(context)`，那是
+**显示模式**（用户在设置里选的「标准界面 / 电视界面 / 自动」），而功能判据是**硬件**。两者混用会出
+「电视切成标准界面 → 开关看得见但点了没用」的假开关。已统一到硬件判据。`AppLayout.isTelevision`
+全仓还有 33 处调用，都是布局/字号/焦点顺序一类 UI 适配，与「能力是否可用」无关，不动。
+
+### 5. 两个必须处理的边界
+
+**① 画中画必须排除。** PiP 窗口虽然「可见」（`_foreground` 为 true），但用户已经切到别的应用，
+这时还让整机屏幕常亮会一直耗电、也违背用户切走的意图。判据里加了 `!_pictureInPictureVisible`。
+
+**② 旧备份必须能恢复。** `PlaybackPreferences.fromJson` 里有一道 `FormatException('播放偏好无效')`
+校验（只验 `speed` / `quality`）。新字段**刻意不进那道校验**，用 `as bool? ?? true` 回落：
+用户拿旧备份恢复时没有这个键，必须默认开启而不是抛异常。同构先例是 `danmaku` 字段。
+
+另外 `player_screen.dart` 的 `_preferences` getter 会重新 `PlaybackPreferences(...)` 构造对象，
+必须显式透传 `keepScreenOn: _keepScreenOnEnabled`——否则用户在设置里关掉后，只要在播放页调一次
+画质/倍速就会被静默改回开启。
+
+### 6. 顺带修掉一个既有缺陷（不是本次引入）
+
+`_pictureInPictureRequested` 的残留：`_enterPictureInPicture()` 会乐观置 `requested = true`，
+若在真正激活前收到一次「伪」`pictureInPictureChanged(active: false)`（原生侧原样转发、无去重），
+会命中可见分支并把 2s 兜底定时器 cancel 掉，于是 `requested` 永久为 true。
+
+这个 flag 同时驱动 `_pictureInPictureVisible`，所以它**今天就已经**会让 PiP 控件再也不出现；
+加上常亮之后又多一个症状：本次播放期间常亮永久失效。修法是回调里显式给 requested：
+
+```dart
+_setPictureInPictureStatus(
+  active: active,
+  requested: active ? null : false,   // 非激活一律清零，堵死残留
+  delayHiddenPause: !active,
+);
+```
+
+### 7. 这次没有加测试，以及为什么
+
+原计划补 2 条纯逻辑测试（往返保真、旧备份缺键回落）。查 CI 后放弃，理由是**护栏在这个仓库里
+目前是装饰品**：`.github/workflows/build.yml` 的 `dart format`、`dart analyze`、两轮
+`flutter test`、两轮 `go test -race` **全部带 `continue-on-error: true`**，源码注释写着
+「测试当前不阻塞出包（开发优先、集中验证暂缓）」。
+
+实测证据：上一次 checks job（id 122652604199）conclusion 是 success，但日志里躺着
+`Formatted 121 files (19 changed)`、`109 issues found`、`EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK`。
+
+所以加测试的收益接近零（红了也不阻断），而本机无法编译验证测试本身写对没（写错只是多一行没人看的红字）。
+**正确顺序是先去掉 `continue-on-error`，再加护栏**，两件事都进 backlog。
+
+### 8. 验证边界（如实说）
+
+- **本机 `dart`/`flutter` 无法用于验证**：`dart.exe`（3.13.3）本身能跑，但仓库没有
+  `.dart_tool/package_config.json`（`pub get --offline` 缺 `video_player`，在线报
+  「Flutter users should use `flutter pub`」），所以 `dart analyze` 把 `BuildContext` /
+  `TargetPlatform` 全报成未定义，85 条全是假错；`dart format` 又是新版 tall style，拿 4 个
+  **完全未改动**的文件去跑也是 4/4 `Changed`（仓库是旧 short style），既不能当不合规证据、也不能写回。
+- 因此**这版 Dart 侧没有编译验证**，只做了人工逐 API 核对（`Icons.screen_lock_portrait_outlined`
+  在 SDK `icons.dart:22243` 真实存在、`dart:io` 已 import、`AppDevice.isTv` 是 static bool 字段、
+  `_pictureInPictureVisible` getter、`saveUserChange` 签名、`TvTile` 参数、`unawaited` 来源）。
+  编译是否通过只能等 CI 的 android job。
+- 行为验证只能真机：装好后播放，等到原来的息屏超时时间（通常 30 秒~2 分钟）看屏幕是否还亮着。
+
+### 9. 已知取舍
+
+**暂停时仍然保持常亮。** `_syncKeepScreenOn` 不看播放状态，只看「在播放页 + 窗口可见」。
+理由是短剧场景暂停通常短暂，且主流视频 App 暂停时也基本保持常亮，行为可预期。
+代价是「暂停后放着不管」会一直亮着屏耗电。若要收紧成「仅播放中常亮」，需监听
+`_player.stream.playing` 并在暂停后加延时（避免暂停瞬间黑屏），属可选增强，本次不做。

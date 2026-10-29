@@ -77,6 +77,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   late final PlaybackLoader _loader;
   late final PlaybackPreloader _preloader;
   bool _preloadEnabled = true;
+  bool _keepScreenOnEnabled = true;
+  bool _keepScreenOnApplied = false;
   late final DanmakuController _danmaku;
   int _seekSequence = 0;
   bool _danmakuEnabled = true;
@@ -153,6 +155,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     autoAdvance: _autoAdvance,
     danmaku: _danmakuEnabled,
     preload: _preloadEnabled,
+    keepScreenOn: _keepScreenOnEnabled,
     enhancement: _enhancement.preferences,
   );
   String get _qualityLabel => _plan?.local == true
@@ -178,6 +181,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _autoAdvance = true;
     _danmakuEnabled = preferences.danmaku;
     _preloadEnabled = true;
+    _keepScreenOnEnabled = preferences.keepScreenOn;
     _loader = PlaybackLoader(widget.repository);
     _preloader = PlaybackPreloader(widget.repository);
     _danmaku = DanmakuController(widget.repository)
@@ -355,6 +359,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         );
       }
     });
+    _syncKeepScreenOn();
   }
 
   void _accessChanged() {
@@ -382,7 +387,11 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (call.method == 'pictureInPictureChanged') {
         final arguments = call.arguments;
         final active = arguments is Map && arguments['active'] == true;
-        _setPictureInPictureStatus(active: active, delayHiddenPause: !active);
+        _setPictureInPictureStatus(
+          active: active,
+          requested: active ? null : false,
+          delayHiddenPause: !active,
+        );
       }
     });
     unawaited(_refreshPictureInPictureStatus());
@@ -472,6 +481,19 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (visible && _pendingError) {
       _queueRecovery();
     }
+    _syncKeepScreenOn();
+  }
+
+  /// 画中画必须排除：PiP 窗口虽然「可见」，但用户已经切到别的应用。
+  void _syncKeepScreenOn() {
+    final keep =
+        _keepScreenOnEnabled &&
+        !AppDevice.isTv &&
+        _foreground &&
+        !_pictureInPictureVisible;
+    if (keep == _keepScreenOnApplied) return;
+    _keepScreenOnApplied = keep;
+    unawaited(AppDevice.setKeepScreenOn(keep));
   }
 
   Future<void> _enterPictureInPicture() async {
@@ -1462,6 +1484,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   @override
   void dispose() {
     _closed = true;
+    if (_keepScreenOnApplied) {
+      _keepScreenOnApplied = false;
+      unawaited(AppDevice.setKeepScreenOn(false));
+    }
     final enhancementClosed = _enhancement.close();
     LanController.current?.detachPlayback(_lanIdentity);
     widget.handoff?.fail('接收端已退出播放');
