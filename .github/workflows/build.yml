@@ -59,10 +59,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # 手机端：不拆 ABI，出一个 32/64 位通用包（见 scripts/build_android.py 的 --universal）。
           - edition: zhenguojian
-            arguments: '--all-sources'
+            arguments: '--all-sources --universal --abi arm64-v8a --abi armeabi-v7a'
+          # 电视端：仍按 ABI 拆成 32 位 / 64 位两个包，老盒子直装不浪费空间。
           - edition: zhenguojian-tv
-            arguments: '--flavor tv --all-sources'
+            arguments: '--flavor tv --all-sources --abi arm64-v8a --abi armeabi-v7a'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -285,8 +287,10 @@ jobs:
 
           # 每个端只发布自己那几个 APK，互不混装：电视端与手机端版本线独立，
           # 这样电视端可以单独发 1.0.x，手机端继续 0.2.x。
+          # 第 6 个参数是「选包说明」，两端产物构成不同（电视拆 ABI / 手机通用包），
+          # 所以由调用方传入，避免把不适合另一端的文件名写进说明里。
           publish() {
-            edition="$1"; version="$2"; tag="$3"; title="$4"; intro="$5"
+            edition="$1"; version="$2"; tag="$3"; title="$4"; intro="$5"; packages="$6"
             src="artifacts/$edition"
             out="release-$edition"
             rm -rf "$out"; mkdir -p "$out"
@@ -295,9 +299,7 @@ jobs:
             {
               printf '%s\n\n' "$intro"
               printf 'Android（%s）\n' "$sign_note"
-              printf '%s\n' "- *-arm64-v8a.apk：绝大多数设备选这个"
-              printf '%s\n' "- *-armeabi-v7a.apk：较老的 32 位设备"
-              printf '%s\n' "- *-x86_64.apk：模拟器 / x86 设备"
+              printf '%b\n' "$packages"
               printf '\n%s\n' "校验：SHA256SUMS.txt"
               printf '%s\n' "$sign_tail"
             } > "$out/notes.md"
@@ -316,7 +318,9 @@ jobs:
           }
 
           publish zhenguojian-android "$phone_version" "app-v$phone_version" "真果鉴 ${phone_version}" \
-            "手机 / 平板版 ${phone_version}（包名 com.duanju.zhenguojian，版本线独立于电视端）。功能与电视端同源，界面按触屏布局。"
+            "手机 / 平板版 ${phone_version}（包名 com.duanju.zhenguojian，版本线独立于电视端）。功能与电视端同源，界面按触屏布局。" \
+            "- *-universal.apk：手机 / 平板通用，32 位与 64 位都装这个"
           # 电视端后发，保证 Releases 页首条是电视版。
           publish zhenguojian-tv-android "$tv_version" "tv-v$tv_version" "真果TV ${tv_version}" \
-            "电视端正式版 ${tv_version}（包名 com.duanju.zhenguo.tv，独立版本线）。遥控器全流程、10-foot 界面、内置 13 个站源。"
+            "电视端正式版 ${tv_version}（包名 com.duanju.zhenguo.tv，独立版本线）。遥控器全流程、10-foot 界面、内置 13 个站源。" \
+            "- *-arm64-v8a.apk：64 位电视 / 盒子\n- *-armeabi-v7a.apk：32 位电视 / 盒子（较老机型选这个）"

@@ -877,3 +877,108 @@ _setPictureInPictureStatus(
 理由是短剧场景暂停通常短暂，且主流视频 App 暂停时也基本保持常亮，行为可预期。
 代价是「暂停后放着不管」会一直亮着屏耗电。若要收紧成「仅播放中常亮」，需监听
 `_player.stream.playing` 并在暂停后加延时（避免暂停瞬间黑屏），属可选增强，本次不做。
+
+## 二十一、APK 从 6 个精简到 3 个：电视拆 ABI，手机出通用包（TV 1.0.9 / 手机 0.2.78，2026-10-30）
+
+### 1. 现在一次发版只出这 3 个包
+
+以前每个 tag 要传 6 个 APK（手机 3 个 ABI + 电视 3 个 ABI），每个包 30~35MB，Release 页面一屏放不下，
+用户还要在「到底该下哪个」上做选择题。现在固定 3 个，各端只面对自己那一两个文件：
+
+| 包 | 文件名 | 装在哪 |
+|---|---|---|
+| 真果TV 32 位 | `zhenguojian-tv-1.0.9-armeabi-v7a.apk` | 老电视 / 老盒子（32 位 ARM） |
+| 真果TV 64 位 | `zhenguojian-tv-1.0.9-arm64-v8a.apk` | 绝大多数电视 / 盒子（64 位 ARM） |
+| 真果鉴 手机通用 | `zhenguojian-0.2.78-universal.apk` | 手机 / 平板，32 位与 64 位通吃 |
+
+改动只落在构建脚本与 workflow，**没有动 `android/app/build.gradle.kts`**：
+
+| 文件 | 改动 |
+|---|---|
+| `scripts/build_android.py` | 新增 `--universal`：不传 `--split-per-abi`，改用 `--build-number <base+5000>`；并把开关透传给打包脚本 |
+| `scripts/package_release.py` | 新增同名 `--universal`：找无 ABI 中缀的 `app-{flavor}-release.apk`、校验两套 so、清理同版本残留包 |
+| `.github/workflows/build.yml` | android matrix 两条都显式带 `--abi arm64-v8a --abi armeabi-v7a`，手机那条额外带 `--universal`；release 说明按端区分 |
+
+### 2. 电视端继续拆，手机端不拆——这是两端的设备分布决定的
+
+电视盒子/电视这类设备，32 位老机型占比远高于手机：一堆 1GB/2GB 内存的老盒子只有 32 位 ABI，
+装通用包既浪费空间又可能被系统拒绝（或解出错误的 ABI）。所以电视端维持 `--split-per-abi`，
+32 位、64 位各一个包，用户按机器挑，出错概率最低。
+
+手机端相反：近几年的手机全是 64 位，剩下极少数 32 位机型用户也不会去查自己的 ABI。
+给手机用户两个包，结果是「装错→闪退→来反馈」。一个通用包直接吃掉这个选择题。
+通用包体积约等于 32 位包 + 64 位包里的 `libapp.so`/`libmpv.so` 等原生库，
+换来「随便下、装上就能跑」，值得。因此 Flutter 构建时给手机端传
+`--target-platform android-arm,android-arm64`（由 `--abi arm64-v8a --abi armeabi-v7a` 推导），
+只把这两套 `libapp.so` 打进包里，不会再冒出 `x86_64` 目录。
+
+### 3. versionCode 从 2084 变 5085：不这么改，老用户装不上新版
+
+这是整轮改动里唯一会「静默炸掉升级链」的地方，务必看懂再动。
+
+Flutter 在 `--split-per-abi` 时会给每个 split 加 versionCode 偏移：
+`armeabi-v7a` **+1000**、`arm64-v8a` **+2000**、`x86_64` **+4000**。历史上 pubspec 是
+`0.2.77+84`，所以真正发出去的手机包 versionCode 是：
+
+- `zhenguojian-0.2.77-arm64-v8a.apk` → **2084**（用户装的绝大多数是这个）
+- `zhenguojian-0.2.77-armeabi-v7a.apk` → 1084
+- `zhenguojian-0.2.77-x86_64.apk` → 4084
+
+取消拆分后，如果不做任何处理，`flutter build apk` 会用 pubspec 的 base 构建号，
+通用包 versionCode 就只有 **85**。Android 的规则是**新包 versionCode 不得低于已安装版本**，
+85 < 2084，结果是所有已装 2084 的用户升级时报「应用未安装 / 版本降级被拒绝」，
+只能卸载重装——追剧记录、搜索历史全丢。这类故障在老用户身上才暴露，测试机（干净的）永远测不出来。
+
+解决办法是在构建通用包时显式追加 `--build-number <base + 5000>`：
+
+```
+0.2.78+85  →  85 + 5000 = 5085
+```
+
+5085 > 历史上所有 split 包的 versionCode（最大 4084），升级链一次接上，用户无感覆盖安装。
+选 5000 而不是 4001，是给电视端的 split 偏移（最大 +4000）留出余量：手机端只要永远走
+「base + 5000」，就一直大于任何 ABI 拆分出的版本号；电视端继续走 base + 偏移（这一版是 1085/2085），
+两条线各自单调递增、互不碰撞。
+
+**必须记住的后果**：从这一版起，手机包的 versionCode 不再等于 `pubspec 的 +N`，而是 `+N + 5000`。
+以后写任何「versionCode 应该是多少」的判断、脚本、文档，都要按 `+5000` 算。
+
+### 4. 为什么 x86_64 彻底取消
+
+手机通用包里本来就不该有 x86_64；电视端这三年没有一个用户反馈过需要 x86 包，
+出它纯粹是为了「万一有人用模拟器」——而模拟器下载的体积成本（每次多 32MB 配额）由所有用户承担。
+真要跑模拟器，现在主流 ARM 模拟器也支持 arm64 镜像，装 64 位电视包即可。
+因此在 workflow 里把手机构建与电视构建的 ABI 都**显式钉成 `arm64-v8a` + `armeabi-v7a`**，
+不再依赖脚本里那个「不传 `--abi` 就三个都出」的默认值。
+
+注意 `scripts/package_release.py` 的 split 分支仍保留了
+`['arm64-v8a', 'armeabi-v7a', 'x86_64']` 这个默认回退表（历史行为，不动它）。
+所以**手动在本机跑打包脚本时必须显式带 `--abi`**，否则它会去找一个早就不产出的
+`app-x86_64-*-release.apk`，然后以「缺少 APK」报错退出——那是预期行为，不是脚本坏了。
+
+### 5. 一条不能踩回去的线：电视端绝不传 `--build-number`
+
+两端的 versionCode 共用一个计数器——`pubspec.yaml` 的 `+N`（见 `BuildVariant.build_number`）。
+`app_build.py` 里刻意只给电视端传 `--build-name`（版本名，如 1.0.9），**从不传 `--build-number`**。
+
+一旦给电视端传了 `--build-number`（不管是固定值还是 base+5000），电视端的 versionCode 就会脱离
+「base + split 偏移」这条线：要么回落到 base（1085/2085 变成 85 那一档），要么被钉成手机端的 5085，
+两种结果都是**电视端覆盖安装直接失败**。这个坑已经踩过一次，别为了「让两端版本号看起来一致」再踩第二次。
+
+同一约束的镜像面：`build_android.py` 现在遇到 `--universal` + `--flavor tv` 会直接
+`SystemExit` 拒跑——通用包必然带 `--build-number`，让这两个参数组合在一起跑起来只会产出
+一个装不上的电视包。电视端要拆包，不需要 `--universal`。
+
+### 6. 这台机器编译不了，所以校验做得比平时狠
+
+本机 Flutter 环境是坏的（没有 `package_config`、`dart.exe` spawn 失败），这一轮**没有本地编译**，
+编译验证全部交给 CI 的 android job。因此 `package_release.py` 的 `--universal` 分支把校验写实了：
+通用包必须**同时**包含 `arm64-v8a` 和 `armeabi-v7a` 两套的 5 个 so
+（`libduanju_core.so`、`libflutter.so`、`libapp.so`、`libmpv.so`、`libffmpegkit.so`），
+少任何一个都 `SystemExit` 并点名是「哪个 ABI 的哪个库」。少了这条，缺库的包会一路构建成功、
+装到用户手机上闪退。
+
+另外，通用包复制前会先删掉 `dist/android/` 里同版本号的其它 `*.apk`
+（`output.glob(f'{slug}-{version}-*.apk')`）。原因：后面的 SHA256SUMS 用 `*-{version}-*` 通配扫描，
+本地残留的 `-x86_64.apk` 会被一起算进校验和、再被 workflow 的 `dist/android/*` 原样上传到 Release，
+最后落成一个「文档里说没有、页面上却真有」的包。

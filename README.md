@@ -6,7 +6,7 @@
 
 [![release](https://img.shields.io/badge/release-1.0.0-FF6B4A)](https://github.com/serra006/guoapp/releases/latest)
 [![platform](https://img.shields.io/badge/platform-Android%20TV%20%7C%20LEANBACK-1B1E27)](https://github.com/serra006/guoapp/releases/latest)
-[![abi](https://img.shields.io/badge/ABI-arm64--v8a%20%7C%20armeabi--v7a%20%7C%20x86__64-1B1E27)](https://github.com/serra006/guoapp/releases/latest)
+[![abi](https://img.shields.io/badge/ABI-arm64--v8a%20%7C%20armeabi--v7a-1B1E27)](https://github.com/serra006/guoapp/releases/latest)
 [![build](https://img.shields.io/badge/build-GitHub%20Actions-2ea44f)](https://github.com/serra006/guoapp/actions)
 
 </div>
@@ -48,14 +48,13 @@
 
 ## 下载与选包
 
-到 **[Releases](https://github.com/serra006/guoapp/releases/latest)** 页下载，只装 **文件名带 `-tv-`** 的那个。
+到 **[Releases](https://github.com/serra006/guoapp/releases/latest)** 页下载：电视装带 `-tv-` 的，手机装不带 `-tv-` 的通用包。
 
 | 你的设备 | 选这个文件 |
 | --- | --- |
 | 大多数 Android TV / 电视盒子（64 位） | `zhenguojian-tv-*-arm64-v8a.apk` |
 | 老款 32 位电视 / 电视盒子 | `zhenguojian-tv-*-armeabi-v7a.apk` |
-| 模拟器 / x86 设备 | `zhenguojian-tv-*-x86_64.apk` |
-| 手机 / 平板 | `zhenguojian-*-arm64-v8a.apk`（文件名不带 `-tv-`） |
+| 手机 / 平板 | `zhenguojian-*-universal.apk`（文件名不带 `-tv-`，32 位与 64 位通用） |
 
 **安装**：U 盘拷入 APK → 电视自带文件管理器打开安装。部分电视会自动清理下载目录里的 APK，建议装完即删。
 
@@ -159,8 +158,8 @@ python3 scripts/build_android.py --flavor tv --cn-mirrors      # 国内镜像
 
 | Artifact | 内容 |
 | --- | --- |
-| `zhenguojian-tv-android` | 电视版三架构 APK + SHA256 |
-| `zhenguojian-android` | 手机版三架构 APK + SHA256 |
+| `zhenguojian-tv-android` | 电视版双架构 APK（`zhenguojian-tv-*-arm64-v8a.apk`、`zhenguojian-tv-*-armeabi-v7a.apk`）+ SHA256 |
+| `zhenguojian-android` | 手机版通用包（单个 `zhenguojian-*-universal.apk`，内含 32/64 两套 so）+ SHA256 |
 
 发布阶段把两端拆成两个 Release，各带各的附件与校验清单：
 
