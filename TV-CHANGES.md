@@ -982,3 +982,118 @@ Flutter 在 `--split-per-abi` 时会给每个 split 加 versionCode 偏移：
 （`output.glob(f'{slug}-{version}-*.apk')`）。原因：后面的 SHA256SUMS 用 `*-{version}-*` 通配扫描，
 本地残留的 `-x86_64.apk` 会被一起算进校验和、再被 workflow 的 `dist/android/*` 原样上传到 Release，
 最后落成一个「文档里说没有、页面上却真有」的包。
+
+## 二十二、红果「完全不能播」的真正根因：设备身份必须由服务端登记（TV 1.0.10 / 手机 0.2.79，2026-10-31）
+
+### 1. 现象：不是个别剧，是整个站源
+
+在电视（TCL `tcl_mt5879_cn`，Android 11）上点红果任何一集都是「无法播放」，换两部不同的剧、换集、隔天再试，
+结果完全一样。这跟以往「偶发取不到流」的形态不同——它稳定、必现、与内容无关。
+
+### 2. 先排除三个最容易被误判的方向
+
+排查阶段同时盯了三件事，全部被证伪：
+
+- **不是签名不对**。同一个签名器、同一套 headers 去打 `video_detail`，能正常拿回 6 个字段；只有取流接口返回
+  HTTP 200 + **0 字节**。签名要是错了，详情接口不可能还活着。
+- **不是网络**。请求确实到达了红果自己的 CDN，TLS 握手完整、`gzip` 解码正常，不存在 SNI 阻断或 DNS 劫持的特征
+  （参见第九、十一节的判别手法）。
+- **不是播放器**。空 body 根本没进到 mpv，问题止步于「没有 url 可播」。
+
+结论因此收敛到一点：**上游按身份拒绝供流**。服务端认不出这套客户端身份，于是不报错、只给空。
+
+### 3. 根因：本地随机生成的 device_id 不再被接受
+
+历史实现里 `device_id`/`iid` 是客户端用 `newHongguoDeviceID()` 随机造出来的，服务端从未见过它们。
+2026-11 起红果收紧了这条线——随机身份打取流接口，一律 200 + 空体。
+
+正确做法是先在**官方设备登记接口**换一套服务端下发的身份：
+
+```
+POST https://log.snssdk.com/service/2/device_register/?<params>
+```
+
+请求体不是明文 JSON，而是红果自己的私有封装包：
+
+```
+magic [116,99,5,16,0,0] + salt(32B 随机)
++ AES-128-CBC(sha512(gzip(json)) || gzip(json),  key=material[0:16], iv=material[16:32])
+material = sha512( sha512(salt) || PROTOCOL_SEED )
+```
+
+`PROTOCOL_SEED` 与线上 APK 一致，任一字节偏差都会被服务端判为非法包（同样表现为 200 + 空体）。
+拿到响应里的 `device_id`/`install_id` 之后，用这套身份取流。
+
+### 4. 光有身份还不够：播放请求必须「不签名」
+
+这是本轮第二个反直觉的结论。目录、详情、搜索、弹幕全部走带 `X-Gorgon` / `X-Argus` / `X-Ladon` 三签名的链路，
+但**播放请求恰恰不能带这三个签名**，也不能带 `_rticket`。
+
+所以 `hongguoAppPlaybackRequest` 是一条**独立的不签名发送路径**，只带：
+UA、`content-type: application/json; charset=utf-8`、`accept: application/json`、
+`x-xs-from-web: 0`、`sdk-version: 2`、`x-ss-stub: md5(body) 大写`。
+
+原有的签名逻辑**一行未改**——只是把「取流」这一个动作从签名链路里摘出来，别的接口继续按原样签名。
+
+### 5. 取流入口也换了：`multi_video_model/v1`
+
+实测可用的入口是 `/novel/player/multi_video_model/v1/`，配方有两个必填项：
+
+- `mixed_video_id_map: {"1": [vid]}` —— 键是字符串 `"1"`，**不是**旧入口的 `1004`。这个键是入口要求，不是画质档位。
+- `biz_param.video_platform: 1024`
+
+响应形态与旧的 `preload/v1` 一致（`data[vid].video_model`），所以解析函数是同一份
+（`hongguoAppMediaFromBatch`，由原 `hongguoAppMediaFromPreload` 改名而来）。
+
+### 6. 两个必须踩对的实现细节
+
+这两条都是实测撞出来的，写在这里防止后人「顺手优化」回去：
+
+1. **登记响应是 gzip 的**。Go 的传输层只在客户端没手动设置 `Accept-Encoding` 时才自动解压；这里必须自己声明
+   `Accept-Encoding: gzip`（否则服务端不压缩、也不给你要的东西），然后判 `1f 8b` 魔数自己 gunzip。
+   不解压直接解析 → 必然失败。
+2. **解析必须用 `json.Decoder.UseNumber()`**。`device_id` 是 15~20 位数字，落在 int64 之外是常态；
+   用 `float64` 解析会退化成 `2.29e+15` 这种科学计数法，精度全丢。第一版就栽在这里：
+   拿 `"2.292955615370618e+15"` 去登记，服务端当作非法身份，返回空。改用 `UseNumber()` 之后立刻拿到 19050 字节。
+
+身份文件 `hongguo-identity.json` 用临时文件 + rename 原子写入（`MkdirAll 0700` / `CreateTemp` / `Rename`），
+与 `huangguo-session.json` 同风格。`device_id`/`iid` 属用户隐私，**只落盘，绝不写日志**；
+诊断日志里只输出「已登记 / 未登记」两个词。
+
+### 7. 失败自愈与并发
+
+- 取流返回空体、或响应里没有本次请求的 vid → 判定为「身份不被接受」，**强制重新登记一次**，再试**一次**（不循环）。
+- 并发播放共用同一次登记请求（`hongguoIdentityCall` 的 done channel 合并），避免每个失败各自去登记把风控打满。
+- 磁盘里的身份文件损坏（截断、非法 JSON、科学计数法、`registered=false`、前导 0）一律当「没有身份」处理，
+  回落到重新登记，而不是拿脏值去请求。已用变异注入逐条验证。
+- 登记失败不影响旧链路：`hongguoPlaybackIdentityOrFallback` 会退回内存里的随机身份，
+  让 `preload` / `video_model` 两条老入口仍按原行为试一次。
+
+### 8. 三级回退链完整保留
+
+红果历来会来回开合接口，所以入口按「新 → 旧」顺序全留：
+
+1. `multi_video_model/v1/` + 登记身份 + 不签名（当前唯一稳定可用）
+2. `multi_video_model/preload/v1/` + 键 `1004`（上一代社区入口，签名链路）
+3. `video_model/v1/` + `video_platform: 3`（更早的单集入口，签名链路）
+
+任一恢复即自动接上，不需要改代码。
+
+### 9. 实测证据
+
+离线单测（`provider_hongguo_register_test.go`，5 个，全绿）：封包形状、空 payload 仍按 PKCS7 补齐、
+身份落盘往返、gzip 解包、失败判定只认「空体 / 无该 vid」两类。
+
+真实网络 E2E（本机 Go 直接跑，非 CI）：
+
+```
+取流    url_len=684  quality=1080  variants=10  duration=3m31.834s  cenc=true  耗时 1.16s
+二次取流 134ms（走内存身份，不重复登记）
+目录     count=160
+详情     title="210万拆迁见人心"  chapters=60
+脏身份自愈 device_len=15  iid_len=15（写入 2.29e+15 后被正确丢弃并重新登记）
+```
+
+「目录 160 / 详情 60 集」这两条是刻意加的：证明改取流**没有**碰到签名链路。
+
+全量 `go test ./core/` 的失败集与本轮改动前**完全一致**（6 项，均为既有问题），无新增回归。

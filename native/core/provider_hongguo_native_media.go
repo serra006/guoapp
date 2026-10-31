@@ -17,12 +17,46 @@ func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoI
 		return providerMedia{}, errors.New("红果视频 ID 无效")
 	}
 	var firstErr error
-	// 取流入口一：multi_video_model/preload/v1/（批量）。红果 2026-10 起陆续停供
-	// /novel/player/video_model/v1/ 与 /novel/player/multi_video_model/v1/
-	// （表现为 HTTP 200 + 空体），preload 是社区实测最后可用的取流入口，配方参照
-	// onedrama ADR 0015。硬性要求：biz_param.video_platform=1024——照抄详情接口的 3
-	// 会被判「参数错误」，实测只有 1024 被收；mixed_video_id_map 的键 1004 = 短剧。
-	// 这两个常量只是入口要求，不是画质档位。响应是批量的：data[vid].video_model。
+
+	// 取流入口零（2026-11 起为唯一稳定可用）：multi_video_model/v1/，用官方设备登记
+	// 接口下发的 device_id/iid，且**不带三签名**。`video_platform: 1024` 与
+	// `mixed_video_id_map` 的键 "1" 是入口要求（不是画质档位），照抄实测配方。
+	// 响应形态：data[vid].video_model。
+	multi := map[string]any{
+		"mixed_video_id_map": map[string]any{"1": []string{videoID}},
+		"biz_param": map[string]any{
+			"detail_page_version": 0, "device_level": 3, "disable_digg_stat": false,
+			"disable_video_relate_book": false, "need_all_video_definition": true,
+			"need_mp4_align": false, "use_os_player": false, "use_server_dns": false,
+			"video_platform": 1024,
+		},
+	}
+	deviceID, installID := downloader.hongguoPlaybackIdentityOrFallback(ctx, false)
+	result, err := downloader.hongguoAppPlaybackRequest(ctx, hongguoAppMultiVideoModelPath, deviceID, installID, multi)
+	var identityErr error
+	if err == nil {
+		if media, mediaErr := hongguoAppMediaFromBatch(result, videoID); mediaErr == nil {
+			return media, nil
+		} else if firstErr == nil {
+			firstErr, identityErr = mediaErr, mediaErr
+		}
+	} else if firstErr == nil {
+		firstErr, identityErr = err, err
+	}
+	// 空响应 = 服务端不认这套身份。重新登记一次拿新身份，再试**一次**（不循环）。
+	if hongguoPlaybackNeedsNewIdentity(identityErr) && ctx.Err() == nil {
+		if retryDevice, retryInstall, registerErr := downloader.hongguoPlaybackIdentity(ctx, true); registerErr == nil {
+			if result, err := downloader.hongguoAppPlaybackRequest(ctx, hongguoAppMultiVideoModelPath, retryDevice, retryInstall, multi); err == nil {
+				if media, mediaErr := hongguoAppMediaFromBatch(result, videoID); mediaErr == nil {
+					return media, nil
+				}
+			}
+		}
+	}
+
+	// 取流入口一（既有回退，保留）：multi_video_model/preload/v1/（批量，签名链路）。
+	// 红果会来回开合接口，preload 是上一代社区实测入口，任一恢复即自动接上。
+	// 硬性要求：biz_param.video_platform=1024，mixed_video_id_map 的键 1004 = 短剧。
 	preload := map[string]any{
 		"biz_param": map[string]any{
 			"detail_page_version": 0, "device_level": 3, "disable_digg_stat": false,
@@ -32,7 +66,7 @@ func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoI
 		"mixed_video_id_map": map[string]any{"1004": []string{videoID}},
 	}
 	if result, err := downloader.hongguoAppRequest(ctx, http.MethodPost, "/novel/player/multi_video_model/preload/v1/", nil, preload); err == nil {
-		if media, mediaErr := hongguoAppMediaFromPreload(result, videoID); mediaErr == nil {
+		if media, mediaErr := hongguoAppMediaFromBatch(result, videoID); mediaErr == nil {
 			return media, nil
 		} else if firstErr == nil {
 			firstErr = mediaErr
@@ -40,8 +74,8 @@ func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoI
 	} else if firstErr == nil {
 		firstErr = err
 	}
-	// 取流入口二：旧的单集入口。红果会来回开合接口——video_detail 当天就随完整签名
-	// 从停供变为可用，media 类入口也可能单独重开。两个入口都预埋，任一恢复即自动接上。
+	// 取流入口二（既有回退，保留）：旧的单集入口。红果会来回开合接口——video_detail
+	// 当天就随完整签名从停供变为可用，media 类入口也可能单独重开。
 	legacy := map[string]any{
 		"video_id": videoID, "content_type": 1,
 		"biz_param": map[string]any{"need_all_video_definition": true, "video_platform": 3},
@@ -56,9 +90,15 @@ func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoI
 		firstErr = err
 	}
 	if firstErr == nil {
-		firstErr = errors.New("红果 App 未返回该视频的播放信息")
+		firstErr = errHongguoAppNoMedia
 	}
 	return providerMedia{}, firstErr
+}
+
+// hongguoPlaybackNeedsNewIdentity 判断失败是否属于「身份不被服务端接受」：
+// HTTP 200 + 0 字节，或响应里根本没有本次请求的 vid。只有这两类才值得换身份重试。
+func hongguoPlaybackNeedsNewIdentity(err error) bool {
+	return err != nil && (errors.Is(err, errHongguoAppEmpty) || errors.Is(err, errHongguoAppNoMedia))
 }
 
 // hongguoAppMediaFromResult 解析旧单集入口的响应：data.video_model 可能是对象，
@@ -74,15 +114,16 @@ func hongguoAppMediaFromResult(result map[string]any) (providerMedia, error) {
 		}
 	}
 	if len(model) == 0 {
-		return providerMedia{}, errors.New("红果 App 未返回该视频的播放信息")
+		return providerMedia{}, errHongguoAppNoMedia
 	}
 	return selectHongguoAppMedia(model)
 }
 
-// hongguoAppMediaFromPreload 从批量取流响应里挑出本次请求的那个 vid 的 video_model。
+// hongguoAppMediaFromBatch 从批量取流响应里挑出本次请求的那个 vid 的 video_model。
+// multi_video_model/v1/ 与 preload/v1/ 的响应形态一致（data[vid].video_model）。
 // 只认请求的 vid，不退回「data 里唯一的那一项」——批量响应里那一项可能是别的集，
 // 张冠李戴比报错糟得多（同详情腿核对 series_id 的口径）。
-func hongguoAppMediaFromPreload(result map[string]any, videoID string) (providerMedia, error) {
+func hongguoAppMediaFromBatch(result map[string]any, videoID string) (providerMedia, error) {
 	entry, _ := nestedMap(result, "data")[videoID].(map[string]any)
 	model, _ := entry["video_model"].(map[string]any)
 	if encoded, ok := entry["video_model"].(string); ok {
@@ -93,7 +134,7 @@ func hongguoAppMediaFromPreload(result map[string]any, videoID string) (provider
 		}
 	}
 	if len(model) == 0 {
-		return providerMedia{}, errors.New("红果 App 未返回该视频的播放信息")
+		return providerMedia{}, errHongguoAppNoMedia
 	}
 	return selectHongguoAppMedia(model)
 }

@@ -3,6 +3,8 @@ package core
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +20,16 @@ import (
 const hongguoAppBaseURL = "https://api5-normal-sinfonlineb.fqnovel.com"
 
 const hongguoAppUserAgent = "com.phoenix.read/73532 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)"
+
+// hongguoAppMultiVideoModelPath 是当前唯一稳定可用的取流入口（2026-11 实测）。
+const hongguoAppMultiVideoModelPath = "/novel/player/multi_video_model/v1/"
+
+// errHongguoAppEmpty 表示红果返回 HTTP 200 + 0 字节。这是「身份不被接受 / 触发风控」
+// 的典型表现，取流链路据此换一个新登记身份重试一次（只一次，不循环）。
+var errHongguoAppEmpty = errors.New("红果 App 接口未返回有效数据")
+
+// errHongguoAppNoMedia 表示响应正常但不含本次请求 vid 的播放信息。
+var errHongguoAppNoMedia = errors.New("红果 App 未返回该视频的播放信息")
 
 type hongguoCatalogCursor struct {
 	Offset        int       `json:"offset"`
@@ -49,6 +61,12 @@ type hongguoAppClient struct {
 	suggestPending map[string]*hongguoSuggestionCall
 	danmaku        map[string]hongguoDanmakuCacheEntry
 	danmakuPending map[string]*hongguoDanmakuCall
+	// 设备登记身份（取流用）。与 state.DeviceID/InstallID 分开存：目录/详情/弹幕
+	// 继续用原有随机身份 + 三签名，取流切到登记身份 + 不签名，互不影响。
+	identityMu     sync.Mutex
+	identityLoaded bool
+	identity       hongguoIdentityState
+	identityCall   *hongguoIdentityCall
 }
 
 func (downloader *Downloader) hongguoClient() *hongguoAppClient {
@@ -228,7 +246,7 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 			continue
 		}
 		if len(content) == 0 || len(content) > providerMaxBodyBytes {
-			return nil, errors.New("红果 App 接口未返回有效数据")
+			return nil, errHongguoAppEmpty
 		}
 		var result map[string]any
 		decoder := json.NewDecoder(bytes.NewReader(content))
@@ -243,4 +261,87 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 		return result, nil
 	}
 	return nil, lastErr
+}
+
+// hongguoPlaybackQuery 构造取流请求的 query。参数集合与 hongguoAppRequest 的公共
+// 部分一致，但 device_id/iid 换成设备登记接口下发的身份。
+func hongguoPlaybackQuery(deviceID, installID string) url.Values {
+	return url.Values{
+		"aid": {"8662"}, "app_name": {"novelread"}, "version_code": {hongguoRegisterVersion},
+		"version_name": {hongguoRegisterVersionNa}, "manifest_version_code": {hongguoRegisterVersion},
+		"update_version_code": {hongguoRegisterVersion}, "channel": {"update_64"},
+		"device_platform": {"android"}, "os": {"android"}, "ssmix": {"a"},
+		"device_type": {"25053RT47C"}, "device_brand": {"Redmi"}, "language": {"zh"},
+		"os_api": {"36"}, "os_version": {"16"}, "resolution": {"1280*2772"},
+		"dpi": {"520"}, "ac": {"wifi"},
+		"device_id": {deviceID}, "iid": {installID},
+	}
+}
+
+// hongguoAppPlaybackRequest 是取流专用的「不签名」发送路径。
+//
+// 红果 2026-11 起：播放接口若带 X-Gorgon/X-Argus/X-Ladon 三签名，即使身份合法也返回
+// HTTP 200 + 0 字节；只有「UA + accept: application/json + x-xs-from-web: 0 +
+// sdk-version: 2 + x-ss-stub（body 的 MD5 大写）」这一组头才正常返回 video_model。
+// 因此这里**不能**复用 hongguoAppRequest（它一定签名，且目录/详情/弹幕依赖那套签名，
+// 动了会连带把目录打挂）。可复用的只有限流器、d.client 传输层与 20 秒超时，
+// 这三点都由 doPreparedCatalogRequest 统一负责。
+func (downloader *Downloader) hongguoAppPlaybackRequest(ctx context.Context, path, deviceID, installID string, payload any) (map[string]any, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, errors.New("无法准备红果取流请求")
+	}
+	// x-ss-stub 是 body 的 MD5（大写十六进制）。空 body 时不带，避免与服务端的
+	// 「无 body」判断冲突。
+	stub := ""
+	if len(body) > 0 {
+		sum := md5.Sum(body)
+		stub = strings.ToUpper(hex.EncodeToString(sum[:]))
+	}
+	client := downloader.hongguoClient()
+	client.mu.Lock()
+	base := client.baseURL
+	client.mu.Unlock()
+	query := hongguoPlaybackQuery(deviceID, installID)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(base, "/")+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, errors.New("无法准备红果取流请求")
+	}
+	request.Header.Set("User-Agent", hongguoAppUserAgent)
+	request.Header.Set("Content-Type", "application/json; charset=utf-8")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("X-Xs-From-Web", "0")
+	request.Header.Set("Sdk-Version", "2")
+	if stub != "" {
+		request.Header.Set("X-Ss-Stub", stub)
+	}
+	response, err := downloader.doPreparedCatalogRequest(request, 20*time.Second, func(prepared *http.Request) {
+		prepared.URL.RawQuery = query.Encode()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("红果取流请求失败: %w", publicError(err))
+	}
+	content, readErr := io.ReadAll(io.LimitReader(response.Body, providerMaxBodyBytes+1))
+	response.Body.Close()
+	if readErr != nil {
+		return nil, errors.New("红果取流响应读取中断")
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("红果取流接口 HTTP %d", response.StatusCode)
+	}
+	if len(content) == 0 || len(content) > providerMaxBodyBytes {
+		return nil, errHongguoAppEmpty
+	}
+	var result map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	decoder.UseNumber()
+	if err := decoder.Decode(&result); err != nil || result == nil {
+		return nil, errors.New("红果取流接口返回格式异常")
+	}
+	code := firstNonEmpty(mapString(result, "code", "Code", "status_code"), mapString(nestedMap(result, "BaseResp"), "StatusCode"))
+	if code != "" && code != "0" {
+		return nil, fmt.Errorf("红果取流接口暂不可用（%s）", truncate(code, 20))
+	}
+	return result, nil
 }
