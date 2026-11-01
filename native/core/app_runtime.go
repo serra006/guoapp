@@ -277,7 +277,12 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 	// 鬼片一类站点的视频挂在 vNN.<裸域> 的 CDN 上，这些域名同时遭到 DNS 劫持与
 	// SNI 阻断，只能走「真实 IP + 裸域 SNI」的通道；其余域名完全透传。
 	masked := newGuipianCdnMaskTransport(newHongguoSniMaskTransport(browser, transport), transport, resolver)
-	d.client = &http.Client{Transport: masked, Timeout: 45 * time.Second,
+	// 采集站把视频挂在 <前缀>.<随机域>.cn 这类云 CDN 上时，中转网络会按 SNI 阻断：
+	// 原链路先试，失败再换「真实 IP + 裸域 SNI」重试一次（详见文件头）。
+	fallback := newCdnSniFallbackTransport(masked, transport, resolver)
+	// 站源接口域名在传输层失败（拨号/握手/被重置）时会自动换另一条通道再试一次，
+	// 见 network_provider_retry.go；其他域名完全透传，不受影响。
+	d.client = &http.Client{Transport: newProviderRetryTransport(fallback, transport, resolver, router), Timeout: 45 * time.Second,
 		CheckRedirect: func(request *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return errors.New("站源重定向次数过多")

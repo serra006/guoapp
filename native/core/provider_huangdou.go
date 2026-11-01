@@ -22,7 +22,12 @@ import (
 )
 
 const (
-	huangdouBaseURL     = "https://tideember.cc"
+	// 黄豆主站域名 tideember.cc 的源站 DNS 已经失效（Cloudflare 返回 1016/HTTP 530），
+	// 现行接口域名是 xqjurgek.top。这里把可用域名放前面，旧域名留作兜底：
+	// 原来是把死域名排第一，每个客户端头一次请求都要白等一次失败，
+	// 一旦 cfg.Retries 配成 1 就再也切不到可用域名，整源直接不可用。
+	huangdouBaseURL     = "https://xqjurgek.top"
+	huangdouLegacyURL   = "https://tideember.cc"
 	huangdouVersion     = "2.0.0"
 	huangdouDeviceType  = "web"
 	huangdouPlatformKey = "7961beb44246e3012ce228d6b5ced05a"
@@ -144,7 +149,7 @@ func (c *huangdouAPIClient) call(ctx context.Context, path string, data map[stri
 			return lastErr
 		}
 		if c.host == huangdouBaseURL && c.d.cfg.HuangdouURL == "" {
-			c.host = "https://xqjurgek.top"
+			c.host = huangdouLegacyURL
 		}
 	}
 	return lastErr

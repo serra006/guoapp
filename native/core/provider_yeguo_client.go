@@ -42,6 +42,11 @@ var (
 	yeguoTransitWords     = regexp.MustCompile(`(?s)\bwords\s*=\s*["']([^"']+)["']\s*\.split\(["'],["']\)`)
 	yeguoTransitLiteral   = regexp.MustCompile(`https?://[a-z0-9-]+(?:\.[a-z0-9-]+)+/?`)
 	yeguoTransitHostLabel = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	// 新版前端（2026-11）把接口入口写成打包后的字面量，例如
+	//   Tf=()=>`https://www.yeguodj.com/api.php`
+	// 不再出现在 Nuxt SSR payload 的 apiBaseURL 字段里。这里按「任意以 api.php
+	// 结尾的 https 字面量」抓取，不绑定具体变量名，上游改名也不会失效。
+	yeguoScriptAPIBase = regexp.MustCompile(`https://[a-z0-9][a-z0-9.-]{1,62}(?::[0-9]{2,5})?/[A-Za-z0-9_./-]{0,64}api\.php`)
 )
 
 type yeguoAccess struct {
@@ -302,39 +307,66 @@ func (client *yeguoAPIClient) do(ctx context.Context, request *http.Request, tim
 	return response, nil
 }
 
-func yeguoAPIBase(document *html.Node, configured string) (string, error) {
-	base := strings.TrimRight(configured, "/")
-	if base == "" {
-		for _, node := range providerHTMLNodes(document, func(node *html.Node) bool {
-			return node.Data == "script" && providerHTMLAttr(node, "id") == "__NUXT_DATA__"
-		}) {
-			if node.FirstChild == nil {
+// validYeguoAPIBase 校验接口入口：必须是 http(s) 绝对地址，且不带用户信息、
+// query 与 fragment（接口地址后面要靠路径拼接路由）。
+func validYeguoAPIBase(base string) bool {
+	address, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || !isProviderHTTPMediaURL(base) || address.User != nil || address.RawQuery != "" || address.Fragment != "" {
+		return false
+	}
+	return true
+}
+
+// yeguoScriptAPIBaseURL 从打包 chunk 里找接口入口字面量。找不到返回空串。
+func yeguoScriptAPIBaseURL(script string) string {
+	for _, match := range yeguoScriptAPIBase.FindAllString(script, 8) {
+		if base := strings.TrimRight(match, "/"); validYeguoAPIBase(base) {
+			return base
+		}
+	}
+	return ""
+}
+
+// yeguoAPIBase 解析接口入口，按优先级：
+//  1. 显式配置（cfg.YeguoAPIURL）；
+//  2. Nuxt SSR payload 的 apiBaseURL（旧结构，2026-11 已被上游删除，保留兼容）；
+//  3. 空串——交给调用方从 chunk 字面量里找（yeguoScriptAPIBaseURL）。
+func yeguoAPIBase(document *html.Node, configured string) string {
+	if base := strings.TrimRight(strings.TrimSpace(configured), "/"); base != "" {
+		if validYeguoAPIBase(base) {
+			return base
+		}
+		return ""
+	}
+	base := ""
+	for _, node := range providerHTMLNodes(document, func(node *html.Node) bool {
+		return node.Data == "script" && providerHTMLAttr(node, "id") == "__NUXT_DATA__"
+	}) {
+		if node.FirstChild == nil {
+			continue
+		}
+		var table []json.RawMessage
+		if json.Unmarshal([]byte(node.FirstChild.Data), &table) != nil || len(table) > 100000 {
+			continue
+		}
+		for _, raw := range table {
+			var fields map[string]json.RawMessage
+			if json.Unmarshal(raw, &fields) != nil || fields["apiBaseURL"] == nil {
 				continue
 			}
-			var table []json.RawMessage
-			if json.Unmarshal([]byte(node.FirstChild.Data), &table) != nil || len(table) > 100000 {
-				continue
+			var reference int
+			if json.Unmarshal(fields["apiBaseURL"], &reference) == nil && reference >= 0 && reference < len(table) {
+				_ = json.Unmarshal(table[reference], &base)
 			}
-			for _, raw := range table {
-				var fields map[string]json.RawMessage
-				if json.Unmarshal(raw, &fields) != nil || fields["apiBaseURL"] == nil {
-					continue
-				}
-				var reference int
-				if json.Unmarshal(fields["apiBaseURL"], &reference) == nil && reference >= 0 && reference < len(table) {
-					_ = json.Unmarshal(table[reference], &base)
-				}
-				if base != "" {
-					break
-				}
+			if base != "" {
+				break
 			}
 		}
 	}
-	address, err := url.Parse(base)
-	if err != nil || !isProviderHTTPMediaURL(base) || address.User != nil || address.RawQuery != "" || address.Fragment != "" {
-		return "", errors.New("野果页面未提供有效的接口入口")
+	if base = strings.TrimRight(strings.TrimSpace(base), "/"); base != "" && validYeguoAPIBase(base) {
+		return base
 	}
-	return strings.TrimRight(base, "/"), nil
+	return ""
 }
 
 func yeguoScriptURL(base, reference string) string {
@@ -423,10 +455,9 @@ func (client *yeguoAPIClient) discoverConfigurationAt(ctx context.Context, site 
 	if err != nil {
 		return nil, err
 	}
-	apiBase, err := yeguoAPIBase(document, d.cfg.YeguoAPIURL)
-	if err != nil {
-		return nil, err
-	}
+	// 接口入口可能来自配置项或 Nuxt payload，也可能是打包 chunk 里的字面量；
+	// 后者要等脚本抓回来才知道，所以这里先「已知就先用」，未知再边走边补。
+	apiBase := yeguoAPIBase(document, d.cfg.YeguoAPIURL)
 	entry := ""
 	for _, script := range providerHTMLNodes(document, func(node *html.Node) bool {
 		return node.Data == "script" && providerHTMLAttr(node, "type") == "module"
@@ -442,11 +473,15 @@ func (client *yeguoAPIClient) discoverConfigurationAt(ctx context.Context, site 
 	if err != nil {
 		return nil, err
 	}
+	if apiBase == "" {
+		apiBase = yeguoScriptAPIBaseURL(entryBody)
+	}
 	imports := yeguoModuleImport.FindAllStringSubmatch(entryBody, 64)
 	sort.SliceStable(imports, func(i, j int) bool {
 		return !strings.Contains(imports[i][1], ",") && strings.Contains(imports[j][1], ",")
 	})
 	seen := map[string]bool{}
+	var access *yeguoAccess
 	var lastErr error
 	for _, imported := range imports {
 		if len(imported[1]) > 2400 {
@@ -469,18 +504,29 @@ func (client *yeguoAPIClient) discoverConfigurationAt(ctx context.Context, site 
 			}
 			continue
 		}
-		access := parseYeguoPublicConfiguration(body)
+		// 接口入口与接口密钥可能落在不同 chunk 里，边走边收，凑齐即停。
+		if apiBase == "" {
+			apiBase = yeguoScriptAPIBaseURL(body)
+		}
 		if access == nil {
-			continue
+			access = parseYeguoPublicConfiguration(body)
 		}
-		var identifier [16]byte
-		if _, err := rand.Read(identifier[:]); err != nil {
-			return nil, errors.New("无法初始化野果请求会话")
+		if access != nil && apiBase != "" {
+			break
 		}
-		access.base, access.site, access.identifier, access.loadedAt = apiBase, site, hex.EncodeToString(identifier[:]), time.Now()
-		return access, nil
 	}
-	return nil, errors.Join(errors.New("野果接口配置已变化，暂时无法解码，请稍后重试"), lastErr)
+	if apiBase == "" {
+		return nil, errors.Join(errors.New("野果页面未提供有效的接口入口"), lastErr)
+	}
+	if access == nil {
+		return nil, errors.Join(errors.New("野果接口配置已变化，暂时无法解码，请稍后重试"), lastErr)
+	}
+	var identifier [16]byte
+	if _, err := rand.Read(identifier[:]); err != nil {
+		return nil, errors.New("无法初始化野果请求会话")
+	}
+	access.base, access.site, access.identifier, access.loadedAt = apiBase, site, hex.EncodeToString(identifier[:]), time.Now()
+	return access, nil
 }
 
 func decodeYeguoJSONObject(body []byte) (map[string]any, error) {
@@ -528,6 +574,11 @@ func decodeYeguoResponse(body []byte, access *yeguoAccess) (map[string]any, erro
 	envelope, err := decodeYeguoJSONObject(body)
 	if err != nil {
 		return nil, err
+	}
+	// 新版外层信封是 {"errcode":0,"timestamp":…,"data":"…","sign":"…"}（旧的直接是
+	// status/msg/data），业务状态移到解密后的内层，这里只拦传输/网关层的 errcode。
+	if code := mapString(envelope, "errcode"); code != "" && code != "0" {
+		return nil, fmt.Errorf("野果接口返回错误（%s）", truncate(code, 20))
 	}
 	if signature := mapString(envelope, "sign"); signature != "" {
 		expected, err := yeguoResponseSignature(envelope, access.signKey)

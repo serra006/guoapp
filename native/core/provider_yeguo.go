@@ -48,11 +48,51 @@ func firstPresent(values map[string]any, keys ...string) any {
 	return nil
 }
 
-func (d *Downloader) fetchYeguoCategories(ctx context.Context) ([]nativeCategory, error) {
-	data, err := d.yeguoClient().call(ctx, "/api/home/contentOptions", nil)
-	if err != nil {
-		return nil, err
+// yeguoCategoriesFromFilters 解析新版分类树：分类跟着剧场列表一起下发，
+// 形态是 data.filters = [{"key":"theme","title":"主题","options":[{"name":…,"value":7}]}]。
+// 字段名与老版 contentOptions 的 video_filter 一致（theme/setting/background/time/
+// recommend），值仍是数字 ID，所以下游 validYeguoCategory 的校验口径不用动。
+func yeguoCategoriesFromFilters(value any) []nativeCategory {
+	rows, _ := value.([]any)
+	if len(rows) == 0 || len(rows) > 32 {
+		return nil
 	}
+	categories := make([]nativeCategory, 0, 32)
+	seen := map[string]bool{}
+	for _, row := range rows {
+		filter, _ := row.(map[string]any)
+		field := mapString(filter, "key")
+		known := false
+		for _, name := range yeguoFilterFields {
+			known = known || name == field
+		}
+		if !known {
+			continue
+		}
+		options, _ := filter["options"].([]any)
+		if len(options) > 300 {
+			return nil
+		}
+		for _, option := range options {
+			item, _ := option.(map[string]any)
+			value, name := mapString(item, "value"), mapString(item, "name")
+			if value == "" || value == "0" {
+				continue
+			}
+			id := field + ":" + value
+			if !validYeguoCategory(id) || name == "" || len([]rune(name)) > 48 || seen[id] {
+				continue
+			}
+			seen[id] = true
+			categories = append(categories, nativeCategory{ID: id, Name: name})
+		}
+	}
+	return categories
+}
+
+// yeguoCategoriesFromContentOptions 解析旧入口 /api/home/contentOptions 的
+// video_filter（2026-11 起上游已下线该路由，保留作为回退）。
+func yeguoCategoriesFromContentOptions(data map[string]any) ([]nativeCategory, error) {
 	filters, valid := data["video_filter"].(map[string]any)
 	if !valid {
 		return nil, errors.New("野果分类数据格式无效")
@@ -83,6 +123,24 @@ func (d *Downloader) fetchYeguoCategories(ctx context.Context) ([]nativeCategory
 		return nil, errors.New("野果暂未返回分类")
 	}
 	return categories, nil
+}
+
+func (d *Downloader) fetchYeguoCategories(ctx context.Context) ([]nativeCategory, error) {
+	// 主入口：剧场列表自带分类树（新版唯一入口）。
+	data, err := d.yeguoClient().call(ctx, "/api/theater/exploreList", url.Values{"page": {"1"}, "limit": {"20"}})
+	if err != nil {
+		return nil, err
+	}
+	if categories := yeguoCategoriesFromFilters(data["filters"]); len(categories) > 0 {
+		return categories, nil
+	}
+	// 回退：老版独立分类接口。上游哪天回滚结构就能自动接上。
+	if legacy, legacyErr := d.yeguoClient().call(ctx, "/api/home/contentOptions", nil); legacyErr == nil {
+		if categories, parseErr := yeguoCategoriesFromContentOptions(legacy); parseErr == nil {
+			return categories, nil
+		}
+	}
+	return nil, errors.New("野果暂未返回分类")
 }
 
 func yeguoDramaFromMap(row map[string]any, site string) (Drama, error) {
