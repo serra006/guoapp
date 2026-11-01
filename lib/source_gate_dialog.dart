@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import 'app_layout.dart';
 import 'local_store.dart';
 import 'models.dart';
+import 'remote_widgets.dart';
 
 /// 站源密码锁弹窗：启用 / 关闭密码功能，以及解锁 / 重新锁定隐藏站源。
 Future<void> showSourceGateDialog(BuildContext context, LocalStore store) =>
@@ -75,6 +77,50 @@ class _SourceGateDialogState extends State<SourceGateDialog> {
     await _run(widget.store.disableSourceGate);
   }
 
+  /// 密码输入框：触屏端用系统输入框，电视端用自建虚拟键盘。
+  ///
+  /// 项目在电视端刻意清除了系统软键盘（见 TV-CHANGES 第二节「系统软键盘清除」5 处），
+  /// 所以电视上原生 TextField 没有任何键盘可弹，密码永远输不进去。
+  /// 这里按 AppLayout.isTelevision 分流，触屏端行为与改动前逐字节一致。
+  Widget _pinInput(
+    String label,
+    TextEditingController controller, {
+    bool autofocus = false,
+  }) {
+    if (!AppLayout.isTelevision(context)) {
+      return TextField(
+        controller: controller,
+        autofocus: autofocus,
+        obscureText: true,
+        keyboardType: TextInputType.number,
+        decoration: InputDecoration(labelText: label),
+      );
+    }
+    return OutlinedButton.icon(
+      autofocus: autofocus,
+      icon: const Icon(Icons.dialpad_rounded),
+      label: Text(
+        controller.text.isEmpty
+            ? '$label：点此用遥控器输入'
+            : '$label：已输入 ${controller.text.length} 位数字',
+      ),
+      onPressed: () async {
+        final value = await showTelevisionTextInput(
+          context,
+          title: label,
+          numericOnly: true,
+          obscureText: true,
+          maxLength: 12,
+          hint: '3–12 位数字',
+        );
+        // 自建键盘是异步弹窗，回来时本弹窗可能已经被 pop 掉。
+        if (value != null && mounted) {
+          setState(() => controller.text = value);
+        }
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = widget.store;
@@ -97,22 +143,9 @@ class _SourceGateDialogState extends State<SourceGateDialog> {
                 ),
                 if (admin) ...[
                   const SizedBox(height: 16),
-                  TextField(
-                    controller: _pin,
-                    autofocus: true,
-                    obscureText: true,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: '设置密码（3 至 12 位数字）',
-                    ),
-                  ),
+                  _pinInput('设置密码（3 至 12 位数字）', _pin, autofocus: true),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: _confirm,
-                    obscureText: true,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: '再次输入密码'),
-                  ),
+                  _pinInput('再次输入密码', _confirm),
                 ] else
                   const Padding(
                     padding: EdgeInsets.only(top: 8),
@@ -128,34 +161,15 @@ class _SourceGateDialogState extends State<SourceGateDialog> {
                 if (!admin)
                   const Text('只有管理员用户可以启用或关闭密码功能。')
                 else ...[
-                  TextField(
-                    controller: _pin,
-                    autofocus: true,
-                    obscureText: true,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: '设置密码（3 至 12 位数字）',
-                    ),
-                  ),
+                  _pinInput('设置密码（3 至 12 位数字）', _pin, autofocus: true),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: _confirm,
-                    obscureText: true,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: '再次输入密码'),
-                  ),
+                  _pinInput('再次输入密码', _confirm),
                 ],
               ] else if (!store.sourcesUnlocked) ...[
                 const Text('隐藏的站源已锁定，输入密码后显示。'),
                 const SizedBox(height: 16),
-                TextField(
-                  controller: _pin,
-                  autofocus: true,
-                  obscureText: true,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: '密码'),
-                  onSubmitted: (_) => _unlock(),
-                ),
+                // 自建键盘没有 onSubmitted，电视端点下方「解锁」按钮即可。
+                _pinInput('密码', _pin, autofocus: true),
               ] else ...[
                 const Text('隐藏的站源已解锁，重启应用后会恢复隐藏。'),
               ],

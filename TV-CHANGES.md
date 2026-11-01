@@ -141,7 +141,7 @@ python scripts/build_android.py               # 手机版（默认 phone，全�
 
 - 新增 `native/core/provider_qimao.go`（约 600 行）：签名、目录/分类/详情/搜索/取流，仿 `provider_huangju.go` 的错误处理与限流写法
 - 接线：`provider_huangguo.go`（源常量 + 白名单 + 别名 `qimao/qmplaylet/qmplaylet.com` + `GetHuangguoChapters`）、`app_runtime.go`（搜索分支 + 目录 switch + 空结果兜底 + 详情 switch + 集数合并）、`app_categories.go`（分类校验 + 分类拉取）、`provider_media.go`（baseURL + 取流分发）、`app_cover_metadata.go`（封面补齐）
-- `lib/models.dart`：新增 `SourceSite('qimao', '七猫', '短剧 · 分类 · 搜索')`，放入 `primaryValues`（默认可见，无需解锁密码），并加入 `pagedSearch`
+- `lib/models.dart`：新增 `SourceSite('qimao', '七猫', '短剧 · 分类 · 搜索')`，放入 `primaryValues`，并加入 `pagedSearch`
 - 本地校验：`go build ./...`、`go vet ./core/`、`go test -run "TestNativeCategories|TestSource|TestProvider"` 全部通过（本机新装 Go 1.24.6 于 `E:/6/tools/go`）
 
 ## 九、红果播放真正修好：移植播放专用签名（v0.2.67+74，2026-10-25）
