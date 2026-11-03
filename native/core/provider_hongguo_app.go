@@ -278,15 +278,21 @@ func hongguoPlaybackQuery(deviceID, installID string) url.Values {
 	}
 }
 
-// hongguoAppPlaybackRequest 是取流专用的「不签名」发送路径。
+// hongguoAppPlaybackRequest 是取流专用的发送路径：**登记身份 + 可选三签名**。
 //
-// 红果 2026-11 起：播放接口若带 X-Gorgon/X-Argus/X-Ladon 三签名，即使身份合法也返回
-// HTTP 200 + 0 字节；只有「UA + accept: application/json + x-xs-from-web: 0 +
-// sdk-version: 2 + x-ss-stub（body 的 MD5 大写）」这一组头才正常返回 video_model。
-// 因此这里**不能**复用 hongguoAppRequest（它一定签名，且目录/详情/弹幕依赖那套签名，
-// 动了会连带把目录打挂）。可复用的只有限流器、d.client 传输层与 20 秒超时，
-// 这三点都由 doPreparedCatalogRequest 统一负责。
-func (downloader *Downloader) hongguoAppPlaybackRequest(ctx context.Context, path, deviceID, installID string, payload any) (map[string]any, error) {
+// 红果对播放接口的准入反复开合，实测过两轮相反的结论：
+//   - 2026-11-01：带 X-Gorgon/X-Argus/X-Ladon 一律 200 + 0 字节，不带才返回 video_model；
+//   - 2026-11-03：反过来 —— 不带签名一律 200 + 0 字节，**必须**带播放签名
+//     （provider_hongguo_player_sign.go 那套，弹幕签名仍无效）。
+//
+// 两种状态下唯一恒定的是：device_id/iid 必须是设备登记接口下发的身份。本地随机身份
+// 即使签名也只会拿到空响应。所以这里固定用登记身份，签名与否由 signed 参数决定，
+// 由调用方按「先签、空响应再退不签」的顺序试，不再把某一轮结论写死。
+//
+// 不复用 hongguoAppRequest 的原因：它只认 client.state 里那套随机身份，而目录/详情/
+// 弹幕正是靠那套身份 + 签名工作的，改它会连带把目录打挂。可复用的只有限流器、
+// d.client 传输层与 20 秒超时，这三点都由 doPreparedCatalogRequest 统一负责。
+func (downloader *Downloader) hongguoAppPlaybackRequest(ctx context.Context, path, deviceID, installID string, payload any, signed bool) (map[string]any, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, errors.New("无法准备红果取流请求")
@@ -317,6 +323,14 @@ func (downloader *Downloader) hongguoAppPlaybackRequest(ctx context.Context, pat
 		request.Header.Set("X-Ss-Stub", stub)
 	}
 	response, err := downloader.doPreparedCatalogRequest(request, 20*time.Second, func(prepared *http.Request) {
+		if signed {
+			// _rticket 必须写在签名之前：签名把 query 一起算进 X-Gorgon，
+			// 签完再改 query 等于自毁签名。
+			query.Set("_rticket", strconv.FormatInt(time.Now().UnixMilli(), 10))
+			prepared.URL.RawQuery = query.Encode()
+			signHongguoPlayerRequest(prepared, body, time.Now())
+			return
+		}
 		prepared.URL.RawQuery = query.Encode()
 	})
 	if err != nil {

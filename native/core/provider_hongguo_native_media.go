@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,12 +15,13 @@ func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoI
 	if !hongguoNumericID.MatchString(videoID) {
 		return providerMedia{}, errors.New("红果视频 ID 无效")
 	}
-	var firstErr error
 
-	// 取流入口零（2026-11 起为唯一稳定可用）：multi_video_model/v1/，用官方设备登记
-	// 接口下发的 device_id/iid，且**不带三签名**。`video_platform: 1024` 与
-	// `mixed_video_id_map` 的键 "1" 是入口要求（不是画质档位），照抄实测配方。
-	// 响应形态：data[vid].video_model。
+	// 三条入口共用一套「登记身份 + 先签后退不签」的发送方式（见 hongguoPlaybackAttempt）。
+	// 区别只在路径与 payload 形状：
+	//   零、multi_video_model/v1/          —— 键 "1"（入口要求，不是画质档位）
+	//   一、multi_video_model/preload/v1/  —— 键 1004 = 短剧，上一代社区实测入口
+	//   二、video_model/v1/                —— 旧的单集入口，响应形态是 data.video_model
+	// 红果会把这几条入口来回开合，任一条恢复就自动接上。
 	multi := map[string]any{
 		"mixed_video_id_map": map[string]any{"1": []string{videoID}},
 		"biz_param": map[string]any{
@@ -31,32 +31,6 @@ func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoI
 			"video_platform": 1024,
 		},
 	}
-	deviceID, installID := downloader.hongguoPlaybackIdentityOrFallback(ctx, false)
-	result, err := downloader.hongguoAppPlaybackRequest(ctx, hongguoAppMultiVideoModelPath, deviceID, installID, multi)
-	var identityErr error
-	if err == nil {
-		if media, mediaErr := hongguoAppMediaFromBatch(result, videoID); mediaErr == nil {
-			return media, nil
-		} else if firstErr == nil {
-			firstErr, identityErr = mediaErr, mediaErr
-		}
-	} else if firstErr == nil {
-		firstErr, identityErr = err, err
-	}
-	// 空响应 = 服务端不认这套身份。重新登记一次拿新身份，再试**一次**（不循环）。
-	if hongguoPlaybackNeedsNewIdentity(identityErr) && ctx.Err() == nil {
-		if retryDevice, retryInstall, registerErr := downloader.hongguoPlaybackIdentity(ctx, true); registerErr == nil {
-			if result, err := downloader.hongguoAppPlaybackRequest(ctx, hongguoAppMultiVideoModelPath, retryDevice, retryInstall, multi); err == nil {
-				if media, mediaErr := hongguoAppMediaFromBatch(result, videoID); mediaErr == nil {
-					return media, nil
-				}
-			}
-		}
-	}
-
-	// 取流入口一（既有回退，保留）：multi_video_model/preload/v1/（批量，签名链路）。
-	// 红果会来回开合接口，preload 是上一代社区实测入口，任一恢复即自动接上。
-	// 硬性要求：biz_param.video_platform=1024，mixed_video_id_map 的键 1004 = 短剧。
 	preload := map[string]any{
 		"biz_param": map[string]any{
 			"detail_page_version": 0, "device_level": 3, "disable_digg_stat": false,
@@ -65,34 +39,81 @@ func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoI
 		},
 		"mixed_video_id_map": map[string]any{"1004": []string{videoID}},
 	}
-	if result, err := downloader.hongguoAppRequest(ctx, http.MethodPost, "/novel/player/multi_video_model/preload/v1/", nil, preload); err == nil {
-		if media, mediaErr := hongguoAppMediaFromBatch(result, videoID); mediaErr == nil {
-			return media, nil
-		} else if firstErr == nil {
-			firstErr = mediaErr
-		}
-	} else if firstErr == nil {
-		firstErr = err
-	}
-	// 取流入口二（既有回退，保留）：旧的单集入口。红果会来回开合接口——video_detail
-	// 当天就随完整签名从停供变为可用，media 类入口也可能单独重开。
 	legacy := map[string]any{
 		"video_id": videoID, "content_type": 1,
 		"biz_param": map[string]any{"need_all_video_definition": true, "video_platform": 3},
 	}
-	if result, err := downloader.hongguoAppRequest(ctx, http.MethodPost, "/novel/player/video_model/v1/", nil, legacy); err == nil {
-		if media, mediaErr := hongguoAppMediaFromResult(result); mediaErr == nil {
-			return media, nil
-		} else if firstErr == nil {
-			firstErr = mediaErr
+	entries := []struct {
+		path    string
+		payload map[string]any
+		parse   func(map[string]any) (providerMedia, error)
+	}{
+		{hongguoAppMultiVideoModelPath, multi, func(result map[string]any) (providerMedia, error) {
+			return hongguoAppMediaFromBatch(result, videoID)
+		}},
+		{"/novel/player/multi_video_model/preload/v1/", preload, func(result map[string]any) (providerMedia, error) {
+			return hongguoAppMediaFromBatch(result, videoID)
+		}},
+		{"/novel/player/video_model/v1/", legacy, hongguoAppMediaFromResult},
+	}
+
+	var firstErr, identityErr error
+	runAll := func(deviceID, installID string) (providerMedia, error) {
+		for _, entry := range entries {
+			media, err := downloader.hongguoPlaybackAttempt(ctx, entry.path, deviceID, installID, entry.payload, entry.parse)
+			if err == nil {
+				return media, nil
+			}
+			if firstErr == nil {
+				firstErr, identityErr = err, err
+			}
 		}
-	} else if firstErr == nil {
-		firstErr = err
+		return providerMedia{}, firstErr
+	}
+
+	deviceID, installID := downloader.hongguoPlaybackIdentityOrFallback(ctx, false)
+	if media, err := runAll(deviceID, installID); err == nil {
+		return media, nil
+	}
+	// 空响应 = 服务端不认这套身份。重新登记一次拿新身份，三条入口再跑**一遍**（不循环）。
+	if hongguoPlaybackNeedsNewIdentity(identityErr) && ctx.Err() == nil {
+		if retryDevice, retryInstall, registerErr := downloader.hongguoPlaybackIdentity(ctx, true); registerErr == nil {
+			if media, err := runAll(retryDevice, retryInstall); err == nil {
+				return media, nil
+			}
+		}
 	}
 	if firstErr == nil {
 		firstErr = errHongguoAppNoMedia
 	}
 	return providerMedia{}, firstErr
+}
+
+// hongguoPlaybackAttempt 对单个入口做「先带签名、空响应再退不签名」的两次尝试。
+//
+// 红果在播放接口上对签名的要求反复开合（2026-11-01 要无签名，2026-11-03 又要签名），
+// 把任何一轮结论写死都会在下一次开合时整体失效。签名只对「空响应 / 没有本次 vid」
+// 这类软拒绝退让；HTTP 状态码异常、JSON 坏掉再试一次也没意义，直接上报。
+func (downloader *Downloader) hongguoPlaybackAttempt(ctx context.Context, path, deviceID, installID string, payload any, parse func(map[string]any) (providerMedia, error)) (providerMedia, error) {
+	signed, signedErr := downloader.hongguoAppPlaybackRequest(ctx, path, deviceID, installID, payload, true)
+	if signedErr == nil {
+		if media, mediaErr := parse(signed); mediaErr == nil {
+			return media, nil
+		} else {
+			signedErr = mediaErr
+		}
+	}
+	if !hongguoPlaybackNeedsNewIdentity(signedErr) || ctx.Err() != nil {
+		return providerMedia{}, signedErr
+	}
+	plain, plainErr := downloader.hongguoAppPlaybackRequest(ctx, path, deviceID, installID, payload, false)
+	if plainErr != nil {
+		return providerMedia{}, signedErr
+	}
+	if media, mediaErr := parse(plain); mediaErr == nil {
+		return media, nil
+	}
+	return providerMedia{}, signedErr
 }
 
 // hongguoPlaybackNeedsNewIdentity 判断失败是否属于「身份不被服务端接受」：
