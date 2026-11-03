@@ -16,11 +16,11 @@ import (
 //
 // 背景（实测数据，不是猜的）：
 //
-//	某台机器上系统代理指向本机 127.0.0.1:20808，黄豆的接口域名 xqjurgek.top
+//	某台机器上系统代理指向本机 127.0.0.1:20808，某站源的接口域名
 //	经代理握手时被对端直接回 alert(40) handshake failure，
-//	而同一时刻直连可以拿到 HTTP 200；反过来黄果的 huangguo.video 直连
+//	而同一时刻直连可以拿到 HTTP 200；反过来另一个站源的域名直连
 //	（被投毒的 A/AAAA 记录指向 2a03:2880:face:b00c::/157.240.x.x）会 i/o timeout，
-//	经代理却能拿到 40 条目录。
+//	经代理却能正常拿到目录。
 //
 // 也就是说「走不走代理」对不同站源是相反的结论，App 里原来只有一个全局设置，
 // 选错一次就是整源不可用。这里不改用户的代理设置，只做一件事：
@@ -83,15 +83,15 @@ func providerHostNeedsFallback(host string) bool {
 		return false
 	}
 	for _, domain := range []string{
-		"xqjurgek.top",   // 黄豆接口（主）
-		"tideember.cc",   // 黄豆接口（旧域名，源站 DNS 已失效）
-		"huangguo.video", // 黄果视频站
-		"huangguoai.com", // 黄果 AI 站
-		"cloudfront.net", // 黄果旧版前端与接口
-		"ediayikma.cc",   // 黄果 AI 站的跳板域名
+		"xqjurgek.top",   // 接口域名（主）
+		"tideember.cc",   // 接口域名（旧，源站 DNS 已失效，留作兜底）
+		"huangguo.video", // 站点前端与详情页
+		"huangguoai.com", // 站点前端与详情页
+		"cloudfront.net", // 旧版 API 前端与接口
+		"ediayikma.cc",   // 播放页跳板
 		"agdkczeyx.cc",   // 同上
-		"dsqqahhno.cc",   // 黄果 AI 站的播放页跳板
-		"hzjvlo.cn",      // 黄果 AI 站的 HLS 域名
+		"dsqqahhno.cc",   // 播放页跳板
+		"hzjvlo.cn",      // HLS 域名
 	} {
 		if host == domain || strings.HasSuffix(host, "."+domain) {
 			return true

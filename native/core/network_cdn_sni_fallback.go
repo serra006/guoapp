@@ -12,13 +12,13 @@ import (
 	"time"
 )
 
-// 一批采集站把视频/密钥挂在 <前缀>.<随机域>.<tld> 这类云厂商 CDN 上，例如
-// 野果的 op.udhhzr.cn / as.oolrvd.cn。它们在中转网络里会被**按 SNI 精确阻断**：
+// 一批采集站把视频/密钥挂在 <前缀>.<站点域>.<tld> 这类云厂商 CDN 上
+// （形如 op.example.com / as.example.net）。它们在中转网络里会被**按 SNI 精确阻断**：
 // TCP 能连上、DNS 也返回真实的 CDN 地址，但 ClientHello 里带真域名时握手期被 RST
 // （调用方看到的是 `EOF` 或 `wsarecv: An existing connection was forcibly closed`）。
 //
 // 实测这些 CDN 只需要把握手阶段的 SNI 换成「剥掉最左一层子域」的裸域
-// （op.udhhzr.cn → SNI=udhhzr.cn）就能握手成功，证书本来就是 *.cdn.myqcloud.com
+// （op.example.com → SNI=example.com）就能握手成功，证书本来就是 *.cdn.myqcloud.com
 // 这类跨域证书，校验本就不成立，所以伪装通道必须跳过证书校验（与鬼片 CDN 掩码同一
 // 口径）；Host 头与 URL 保持原样，回源定位不受影响。
 //
@@ -33,7 +33,7 @@ var cdnSniFallbackTLD = regexp.MustCompile(`(?i)\.(?:com|net|cn|cc|io|xyz|top|vi
 // cdnSniFallbackPrefer 是「该主机名已被证实需要伪装通道」的记忆时长。
 const cdnSniFallbackPrefer = 30 * time.Minute
 
-// cdnSniMaskedServerName 把 op.udhhzr.cn 归一成 udhhzr.cn；不足三层或明显不是
+// cdnSniMaskedServerName 把 op.example.com 归一成 example.com；不足三层或明显不是
 // 域名（IP、单段主机名）时返回空，表示「这条链路没有可用的掩码域」。
 func cdnSniMaskedServerName(host string) string {
 	host = strings.ToLower(strings.TrimSpace(host))

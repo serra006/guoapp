@@ -772,7 +772,7 @@ func parseHuangguoVideoCards(rawHTML, pageURL string) []Drama {
 
 // parseHuangguoAIEpisodeGrid 只从详情页的「分集网格」容器里取分集。
 //
-// 黄果详情页把分集写成 /video/{本剧id}/ 与 /video/{本剧id}/ep-{n}/，并带 data-ep-id；
+// 该类站点的详情页把分集写成 /video/{本剧id}/ 与 /video/{本剧id}/ep-{n}/，并带 data-ep-id；
 // 而页面别处的「推荐位」用的是 /video/{别人的id}/ —— 两者在 HTML 里长得一模一样，
 // 只能靠容器区分。旧的全页扫描正是踩了这个坑：每部剧的前若干集都指向同一批推荐视频。
 func parseHuangguoAIEpisodeGrid(rawHTML, pageURL string) []providerEpisode {
