@@ -178,10 +178,40 @@ func (d *Downloader) doMediaRequestWithClient(request *http.Request, client *htt
 	return nil, errors.New("播放凭证刷新失败")
 }
 
+// errMediaPlaylistRead 表示「连接铺好了、内容读到一半断了」。
+// 这类失败跟链接失效无关，单纯是网络抖动（实测同一地址重试一次就能成功），
+// 所以上面会重试；其余错误（状态码、非 m3u8、超过体积上限）重试没有意义。
+var errMediaPlaylistRead = errors.New("播放列表读取中断")
+
+// errMediaPlaylistTooLarge 是体积上限，重试也不会变小，直接上报。
+var errMediaPlaylistTooLarge = errors.New("播放列表超过 4MB 上限")
+
 func (d *Downloader) fetchMediaPlaylist(ctx context.Context, address, referer string) (string, string, error) {
 	if !isProviderHTTPMediaURL(address) {
 		return "", "", errors.New("播放列表地址无效")
 	}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-time.After(time.Duration(attempt) * 300 * time.Millisecond):
+			case <-ctx.Done():
+				return "", "", ctx.Err()
+			}
+		}
+		text, finalURL, err := d.fetchMediaPlaylistOnce(ctx, address, referer)
+		if err == nil {
+			return text, finalURL, nil
+		}
+		if !errors.Is(err, errMediaPlaylistRead) {
+			return "", "", err
+		}
+		lastErr = err
+	}
+	return "", "", lastErr
+}
+
+func (d *Downloader) fetchMediaPlaylistOnce(ctx context.Context, address, referer string) (string, string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
 		return "", "", err
@@ -193,8 +223,12 @@ func (d *Downloader) fetchMediaPlaylist(ctx context.Context, address, referer st
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, (4<<20)+1))
-	if err != nil || len(body) > 4<<20 {
-		return "", "", errors.New("播放列表过大或读取失败")
+	if err != nil {
+		// 把底层原因带上，否则线上只能看到一句「读取失败」，分不清是超时、被重置还是真的太大。
+		return "", "", fmt.Errorf("%w: %v", errMediaPlaylistRead, err)
+	}
+	if len(body) > 4<<20 {
+		return "", "", errMediaPlaylistTooLarge
 	}
 	if response.StatusCode != http.StatusOK || catalogResponseBlockReason(response, body) != "" {
 		return "", "", d.catalogResponseError(request, response, body)

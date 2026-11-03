@@ -46,24 +46,30 @@ var (
 	huangguoAISlugs     = []string{"recommend", "newest", "ai-duanju", "ai-manju", "ai-huanlian", "ai-mogai", "ranks/hot"}
 	huangguoAITypeNames = map[string]string{"recommend": "精选推荐", "newest": "最近上新", "ai-duanju": "AI成人短剧", "ai-manju": "AI成人漫剧", "ai-huanlian": "AI换脸", "ai-mogai": "AI魔改", "ranks/hot": "排行榜"}
 
-	reDetailHref      = regexp.MustCompile(`(?is)<a\b[^>]*href=["']([^"']*/detail/([^"'/?#]+)[^"']*)["'][^>]*>.*?</a>`)
-	reDramaCardStart  = regexp.MustCompile(`(?is)<div\b[^>]*class=["'][^"']*\bhg-drama-card\b[^"']*["'][^>]*>`)
-	reVideoCard       = regexp.MustCompile(`(?is)<article\b[^>]*class=["'][^"']*\bvideo-card\b[^"']*["'][^>]*>.*?</article>`)
-	reAnyArticle      = regexp.MustCompile(`(?is)<article\b[^>]*>.*?</article>`)
-	reHuangguoLink    = regexp.MustCompile(`(?is)<a\b[^>]*href=["']([^"']*/(?:series|video)/([^"'/?#]+)[^"']*)["'][^>]*>.*?</a>`)
-	reAIEpisodeLink   = regexp.MustCompile(`(?is)<a\b[^>]*href=["']([^"']*/video/[^"']+)["'][^>]*>.*?</a>`)
-	reTitleTag        = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
-	reH1Tag           = regexp.MustCompile(`(?is)<h1[^>]*>(.*?)</h1>`)
-	reDescMeta        = regexp.MustCompile(`(?is)<meta\b[^>]*(?:name|property)=["'](?:description|og:description)["'][^>]*content=["']([^"']+)["'][^>]*>`)
-	reEpisodeNumber   = regexp.MustCompile(`(?i)(?:第\s*0*(\d+)\s*(?:集|话|期)|(?:更新至|共|全)\s*0*(\d+)\s*(?:集|话|期)|(?:episode|ep)\s*#?\s*0*(\d+))`)
-	reResolution      = regexp.MustCompile(`(?i)RESOLUTION\s*=\s*(\d+)x(\d+)`)
-	reBandwidth       = regexp.MustCompile(`(?i)(?:AVERAGE-)?BANDWIDTH\s*=\s*(\d+)`)
-	reDataHLS         = regexp.MustCompile(`(?is)data-hls=["']([^"']+)["']`)
-	reDataPlaySrc     = regexp.MustCompile(`(?is)data-play-src=["']([^"']+)["']`)
-	reMediaFieldValue = regexp.MustCompile(`(?is)["']?(?:videoSrc|videoUrl|playUrl|src|url)["']?\s*[:=]\s*["']([^"']+\.(?:m3u8|mp4)(?:[^"']*)?)["']`)
-	reDateText        = regexp.MustCompile(`\d{4}-\d{1,2}-\d{1,2}`)
-	reViewsText       = regexp.MustCompile(`(?i)[0-9]+(?:\.[0-9]+)?\s*[w万]?\s*次播放`)
-	reScoreText       = regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?\s*分`)
+	reDetailHref     = regexp.MustCompile(`(?is)<a\b[^>]*href=["']([^"']*/detail/([^"'/?#]+)[^"']*)["'][^>]*>.*?</a>`)
+	reDramaCardStart = regexp.MustCompile(`(?is)<div\b[^>]*class=["'][^"']*\bhg-drama-card\b[^"']*["'][^>]*>`)
+	reVideoCard      = regexp.MustCompile(`(?is)<article\b[^>]*class=["'][^"']*\bvideo-card\b[^"']*["'][^>]*>.*?</article>`)
+	reAnyArticle     = regexp.MustCompile(`(?is)<article\b[^>]*>.*?</article>`)
+	reHuangguoLink   = regexp.MustCompile(`(?is)<a\b[^>]*href=["']([^"']*/(?:series|video)/([^"'/?#]+)[^"']*)["'][^>]*>.*?</a>`)
+	reAIEpisodeLink  = regexp.MustCompile(`(?is)<a\b[^>]*href=["']([^"']*/video/[^"']+)["'][^>]*>.*?</a>`)
+	// 详情页里真正的分集列表：<div class="hg-web-play__ep-grid" data-web-play-ep-grid>
+	// 内一串 <a class="hg-web-play__ep" href="/video/12/ep-2/" data-ep-id="2">02</a>。
+	// 页面别处还散着几十个「推荐位」的 /video/{别的id}/ 链接，按全局正则扫会把它们
+	// 当成分集 —— 实测每部剧的前几集都解析成同一批推荐视频，等于放错片子。
+	reHuangguoEpisodeGrid = regexp.MustCompile(`(?is)<div\b[^>]*data-web-play-ep-grid[^>]*>(.*?)</div>`)
+	reHuangguoAnchor      = regexp.MustCompile(`(?is)<a\b[^>]*>.*?</a>`)
+	reTitleTag            = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+	reH1Tag               = regexp.MustCompile(`(?is)<h1[^>]*>(.*?)</h1>`)
+	reDescMeta            = regexp.MustCompile(`(?is)<meta\b[^>]*(?:name|property)=["'](?:description|og:description)["'][^>]*content=["']([^"']+)["'][^>]*>`)
+	reEpisodeNumber       = regexp.MustCompile(`(?i)(?:第\s*0*(\d+)\s*(?:集|话|期)|(?:更新至|共|全)\s*0*(\d+)\s*(?:集|话|期)|(?:episode|ep)\s*#?\s*0*(\d+))`)
+	reResolution          = regexp.MustCompile(`(?i)RESOLUTION\s*=\s*(\d+)x(\d+)`)
+	reBandwidth           = regexp.MustCompile(`(?i)(?:AVERAGE-)?BANDWIDTH\s*=\s*(\d+)`)
+	reDataHLS             = regexp.MustCompile(`(?is)data-hls=["']([^"']+)["']`)
+	reDataPlaySrc         = regexp.MustCompile(`(?is)data-play-src=["']([^"']+)["']`)
+	reMediaFieldValue     = regexp.MustCompile(`(?is)["']?(?:videoSrc|videoUrl|playUrl|src|url)["']?\s*[:=]\s*["']([^"']+\.(?:m3u8|mp4)(?:[^"']*)?)["']`)
+	reDateText            = regexp.MustCompile(`\d{4}-\d{1,2}-\d{1,2}`)
+	reViewsText           = regexp.MustCompile(`(?i)[0-9]+(?:\.[0-9]+)?\s*[w万]?\s*次播放`)
+	reScoreText           = regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?\s*分`)
 )
 
 type providerEpisode struct {
@@ -764,7 +770,67 @@ func parseHuangguoVideoCards(rawHTML, pageURL string) []Drama {
 	return out
 }
 
+// parseHuangguoAIEpisodeGrid 只从详情页的「分集网格」容器里取分集。
+//
+// 黄果详情页把分集写成 /video/{本剧id}/ 与 /video/{本剧id}/ep-{n}/，并带 data-ep-id；
+// 而页面别处的「推荐位」用的是 /video/{别人的id}/ —— 两者在 HTML 里长得一模一样，
+// 只能靠容器区分。旧的全页扫描正是踩了这个坑：每部剧的前若干集都指向同一批推荐视频。
+func parseHuangguoAIEpisodeGrid(rawHTML, pageURL string) []providerEpisode {
+	block := reHuangguoEpisodeGrid.FindStringSubmatch(rawHTML)
+	if len(block) < 2 {
+		return nil
+	}
+	seen := map[string]bool{}
+	var episodes []providerEpisode
+	for _, anchor := range reHuangguoAnchor.FindAllString(block[1], -1) {
+		href := strings.TrimSpace(extractAttr(anchor, "href"))
+		if href == "" || !strings.Contains(href, "/video/") {
+			continue
+		}
+		fullURL := resolveProviderURL(pageURL, href)
+		if fullURL == "" || seen[fullURL] {
+			continue
+		}
+		seen[fullURL] = true
+		index := 0
+		if raw := strings.TrimSpace(extractAttr(anchor, "data-ep-id")); raw != "" {
+			if parsed, convErr := strconv.Atoi(raw); convErr == nil && parsed > 0 {
+				index = parsed
+			}
+		}
+		if index <= 0 {
+			index = episodeIndex(cleanText(anchor), 0)
+		}
+		if index <= 0 {
+			index = len(episodes) + 1
+		}
+		key := strconv.Itoa(index)
+		title := strings.TrimSpace(cleanText(anchor))
+		if title == "" || isDigitsOnly(title) || len([]rune(title)) > 16 {
+			title = fmt.Sprintf("第%d集", index)
+		}
+		episodes = append(episodes, providerEpisode{Key: key, Title: title, URL: fullURL, Index: index})
+	}
+	sortProviderEpisodes(episodes)
+	return episodes
+}
+
+func isDigitsOnly(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func parseHuangguoAIEpisodes(rawHTML, pageURL, sourceID string) []providerEpisode {
+	if episodes := parseHuangguoAIEpisodeGrid(rawHTML, pageURL); len(episodes) > 0 {
+		return episodes
+	}
 	matches := reAIEpisodeLink.FindAllStringSubmatchIndex(rawHTML, -1)
 	seen := map[string]bool{}
 	var episodes []providerEpisode
