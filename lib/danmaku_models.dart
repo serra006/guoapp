@@ -1,5 +1,5 @@
 const danmakuWindowMs = 30000;
-const danmakuLifetimeMs = 8000;
+const danmakuLifetimeMs = 12000;
 const danmakuMaxDurationMs = 86400000;
 
 class DanmakuItem {

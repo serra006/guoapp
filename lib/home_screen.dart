@@ -27,8 +27,6 @@ import 'vip_icon.dart';
 import 'settings_screen.dart';
 import 'profiles_screen.dart';
 import 'search_input.dart';
-import 'source_gate_dialog.dart';
-import 'source_gate_taps.dart';
 import 'sources_screen.dart';
 import 'batch_download_screen.dart';
 import 'batch_downloads.dart';
@@ -76,7 +74,6 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _refreshingUpdatedCache = false;
   bool _selectionMode = false;
   bool _showRecommendations = false;
-  final _recentTaps = RepeatTapGate();
   String _sourceSignature = '';
   bool _catalogLoadScheduled = false;
 
@@ -719,24 +716,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _selectedDramas.clear();
   });
 
-  /// 连点「最近观看」6 次弹出站源密码锁（用于启用 / 关闭密码功能）。
-  /// 仅多源包（真果鉴）生效；红果鉴单源包无密码功能。
-  void _onNavSelected(int tab) {
-    if (allSourcesEnabled && tab == 2) {
-      if (_recentTaps.register(tab)) {
-        _openSourceGate();
-        return;
-      }
-    } else {
-      _recentTaps.reset();
-    }
-    _changeTab(tab);
-  }
-
-  void _openSourceGate() {
-    _pauseCatalog();
-    unawaited(showSourceGateDialog(context, widget.store));
-  }
+  void _onNavSelected(int tab) => _changeTab(tab);
 
   void _cancelSelection() => setState(() {
     _selectionMode = false;
@@ -1092,8 +1072,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       _refreshCatalog();
                     } else if (value == 'sources') {
                       _manageSources();
-                    } else if (value == 'source-gate') {
-                      _openSourceGate();
                     } else if (value == 'settings') {
                       Navigator.push(
                         context,
@@ -1146,13 +1124,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       const PopupMenuItem(
                         value: 'sources',
                         child: Text('站源管理'),
-                      ),
-                    // 电视端没有底部导航栏，手机端「连点最近观看 6 次」的暗门
-                    // 在电视上永远触发不到，这里给管理员补一个遥控器可达的入口。
-                    if (allSourcesEnabled && widget.store.profile.admin)
-                      const PopupMenuItem(
-                        value: 'source-gate',
-                        child: Text('站源密码锁'),
                       ),
                     const PopupMenuItem(value: 'users', child: Text('用户管理')),
                     const PopupMenuItem(

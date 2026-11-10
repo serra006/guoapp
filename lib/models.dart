@@ -55,8 +55,13 @@ class SourceSite {
     sorani,
   ];
 
-  /// 敏感站源：默认隐藏，输入解锁密码后才显示。
-  static const restrictedValues = [
+  /// 历史遗留站源：自本版起不再对外提供，任何界面都不出现。
+  ///
+  /// 保留 id 与展示名只为一件事——旧数据兼容。追剧记录、本地配置档案、
+  /// 局域网同步数据里可能还存着这些 id，若把它们从「已知站源」里删掉，
+  /// `isKnown` 会把旧数据判成非法站源从而丢弃（见 local_store.dart:912、
+  /// local_profiles.dart:52、lan_models.dart:98、lan_sync_models.dart:183）。
+  static const legacyValues = [
     SourceSite('huangdou', '黄豆', '精选短剧'),
     SourceSite('huangju', '剧果', '热门 · 最新 · 分类短剧'),
     SourceSite('yeguo', '野果', '分类短剧 · 在线搜索'),
@@ -65,15 +70,17 @@ class SourceSite {
     SourceSite('huangguoai', '黄果 AI', 'AI 短剧'),
     SourceSite('cloudfront', '黄果旧版', '旧 API 剧库'),
   ];
-  static const knownValues = [...primaryValues, ...restrictedValues];
-  static const allValues = [...primaryValues, ...restrictedValues];
+  /// 可选站源只剩 6 个 primary，与 README 对外口径「内置 6 个站源」一致。
+  static const knownValues = [...primaryValues];
+  /// byId / isKnown 仍然认识历史 id，保证旧数据能正常显示、不被判非法。
+  static const allValues = [...primaryValues, ...legacyValues];
   static const values = allSourcesEnabled ? knownValues : [hongguo];
   static bool isAvailable(String id) => values.any((site) => site.id == id);
   static bool isKnown(String id) => allValues.any((site) => site.id == id);
   static bool isPrimary(String id) =>
       primaryValues.any((site) => site.id == id);
   static bool isRestricted(String id) =>
-      restrictedValues.any((site) => site.id == id);
+      legacyValues.any((site) => site.id == id);
 
   /// 运行时可见站源：未解锁时只保留 [primaryValues]。
   static List<SourceSite> visibleValues({required bool unlocked}) => [

@@ -103,7 +103,7 @@ class _DanmakuOverlayState extends State<DanmakuOverlay> {
             constraints.maxHeight,
             constraints.maxWidth / aspect,
           );
-          final fontSize = width < 600 ? 16.0 : 20.0;
+          final fontSize = width < 600 ? 19.0 : 26.0;
           final scaler = MediaQuery.textScalerOf(context);
           final rowHeight = scaler.scale(fontSize) * 1.5;
           final rows = ((height * .55 - 8) / rowHeight).floor().clamp(0, 4);
