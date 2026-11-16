@@ -38,3 +38,6 @@ ios/Flutter/flutter_export_environment.sh
 ios/Runner/GeneratedPluginRegistrant.*
 ios/DuanjuCore/*.xcframework/
 **/xcuserdata/
+
+# 本地 Go 模块缓存（go test 用 GOPATH 指向此目录时产生）
+.gopath/

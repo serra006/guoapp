@@ -25,13 +25,34 @@ func newHongguoPlayerNonce() (hongguoPlayerNonce, error) {
 
 func signHongguoPlayerRequest(request *http.Request, body []byte, now time.Time) {
 	stamp := uint32(now.Unix())
-	queryHash := md5.Sum([]byte(request.URL.RawQuery))
+	if body != nil {
+		request.Header.Set("X-SS-STUB", fmt.Sprintf("%X", md5.Sum(body)))
+	}
+	request.Header.Set("X-Khronos", strconv.FormatUint(uint64(stamp), 10))
+	request.Header.Set("X-Gorgon", hongguoGorgon(request.URL.RawQuery, body, stamp))
+	request.Header.Set("X-SS-Req-Ticket", strconv.FormatInt(now.UnixMilli(), 10))
+
+	nonce, err := newHongguoPlayerNonce()
+	if err != nil {
+		return
+	}
+	request.Header.Set("X-Argus", hongguoPlayerArgus(request.URL.RawQuery, body, stamp, request.URL.Query().Get("device_id"), nonce))
+	request.Header.Set("X-Ladon", hongguoPlayerLadon(request.URL.Query().Get("aid"), stamp, nonce[2:6]))
+}
+
+// hongguoGorgon 生成 X-Gorgon：query 的 MD5 前 4 字节 + body 的 MD5 前 4 字节 +
+// 固定尾巴 + 秒级时间戳，揉成 20 字节后逐字节混淆，最后加 84 04 40 1c 00 00 前缀。
+//
+// 目录/详情与取流共用这一份实现：Gorgon 只吃 query 摘要、body 摘要和时间戳，
+// 不含任何 per-endpoint 常量，与 Argus/Ladon 的密钥体系完全无关 —— 三套 Argus
+// 各写各的，Gorgon 只该有一个。body 为 nil 时 payload[4:8] 保持全 0。
+func hongguoGorgon(query string, body []byte, stamp uint32) string {
+	queryHash := md5.Sum([]byte(query))
 	var payload [20]byte
 	copy(payload[:4], queryHash[:4])
 	if body != nil {
 		bodyHash := md5.Sum(body)
 		copy(payload[4:8], bodyHash[:4])
-		request.Header.Set("X-SS-STUB", fmt.Sprintf("%X", bodyHash))
 	}
 	copy(payload[12:16], []byte{0, 6, 11, 28})
 	binary.BigEndian.PutUint32(payload[16:], stamp)
@@ -44,16 +65,7 @@ func signHongguoPlayerRequest(request *http.Request, body []byte, now time.Time)
 		payload[index] = bits.Reverse8(mixed) ^ 0xff ^ byte(len(payload))
 	}
 	signature := append([]byte{0x84, 0x04, 0x40, 0x1c, 0, 0}, payload[:]...)
-	request.Header.Set("X-Khronos", strconv.FormatUint(uint64(stamp), 10))
-	request.Header.Set("X-Gorgon", hex.EncodeToString(signature))
-	request.Header.Set("X-SS-Req-Ticket", strconv.FormatInt(now.UnixMilli(), 10))
-
-	nonce, err := newHongguoPlayerNonce()
-	if err != nil {
-		return
-	}
-	request.Header.Set("X-Argus", hongguoPlayerArgus(request.URL.RawQuery, body, stamp, request.URL.Query().Get("device_id"), nonce))
-	request.Header.Set("X-Ladon", hongguoPlayerLadon(request.URL.Query().Get("aid"), stamp, nonce[2:6]))
+	return hex.EncodeToString(signature)
 }
 
 func hongguoPlayerArgus(query string, body []byte, timestamp uint32, deviceID string, nonce hongguoPlayerNonce) string {

@@ -1,0 +1,694 @@
+package core
+
+// 红果 v5 取流签名（2026-11-16 站方下线旧取址接口后唯一可用的一套）。
+//
+// 背景：`/novel/player/multi_video_model/v1/` 与 `video_model/v1/` 在 2026-11-16
+// 起统一返回 HTTP 200 + 0 字节（软停服）。现行入口是
+// `POST /novel/player/multi_video_model/player/v1`，body 必须是 **gzip 压缩后的字节**，
+// 且请求头只认 v5 三元组 `x-khronos` / `x-helios` / `x-medusa`——带旧的
+// Argus 551 / Gorgon / Ladon 反而无效。
+//
+// 三套签名互不兼容，且都要求「被签的字节 == 实际发出的字节」，所以：
+//   - query 必须是**最终发出的那一串**（含 _rticket），不能签完再改；
+//   - body 必须是**压缩后**的字节（x-ss-stub 也是压缩后的 MD5）；
+//   - v5 的 Medusa 有个分支号：query+body+ts 三者算出的低 4 位必须等于 12，
+//     否则必须换一个 _rticket 重算（playbackV5Tune 的做法就是挨个扫）。
+//
+// 算法移植来源：ZainCheung/smovie internal/hongguo/{sign.go,sign_v5.go} 与
+// aston314/hongguo-tv core/cmd/hongguotv/playback_v5_sign.go（两份独立 Go 移植，
+// 交叉核对无差异），其上游是 N3urda/hongguoTV 的 Signer.kt / AesV3.kt / V5Constants.kt。
+
+import (
+	"bytes"
+	"compress/gzip"
+	"crypto/md5"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
+	"errors"
+	"math/bits"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	// hongguoV5Path 是现行取流入口。注意**没有**结尾斜杠，与旧入口不同。
+	hongguoV5Path = "/novel/player/multi_video_model/player/v1"
+	// hongguoV5License 是 v5 专用 license，与旧 551 的 1611921764 完全不是一回事，
+	// 串错只会拿到空体（Helios 的明文里就带着它）。
+	hongguoV5License = "646637794"
+	// hongguoV5ProtoVersion 是随请求上报的 SDK 版本串，必须与 v5 常量集一致。
+	hongguoV5ProtoVersion = "v04.10.03-ml-android"
+	hongguoV5EnvVersion   = "v04.10.03.04-bugfix"
+	// hongguoV5SDKVersionCode 是消息体 field9，0x040a0300 对应 v04.10.03。
+	hongguoV5SDKVersionCode = 0x040a0300
+	// v5 客户端上报的版本号必须与 SDK 串配套：v04.10.03 是 7.4.x 的 SDK，
+	// 用登记那套 7.3.5.32 会出现「7.3.5 客户端装着 7.4.10 SDK」这种不可能的组合。
+	hongguoV5VersionCode = "74332"
+	hongguoV5VersionName = "7.4.3.32"
+	// hongguoV5Branch 是 Medusa 支持的唯一分支号（signingIV 链低 4 位）。
+	hongguoV5Branch = 12
+	// hongguoV5TicketSpan 是 _rticket 的搜索窗口：1 秒内必然能扫到分支 12。
+	hongguoV5TicketSpan = 1024
+)
+
+var (
+	hongguoV5Magic   = hongguoV5Unhex("2d4b4fca49750d433fb5ae2c226dcc56")
+	hongguoV5SignKey = hongguoV5Unhex("b23c2a470a20d105dc3f8c4438f8272ed46d6c89ffdcdedd5108698d26e9489d")
+	// hongguoV5SBox 是 v5 专用的 4×256 分组密码 sbox，和旧 Medusa 那份不是同一组字节。
+	hongguoV5SBox = hongguoV5Unhex(
+		"53290fe9e51f316f90f74a7e034d367784ab49237cd0135cdc632c322fd3be0e2624a417ecd9151a7ff64f60730a87f9445ec6ada2f865d22b696c4188f24c0d" +
+			"f37b75510b939f6bc2fe6883e68bc8c722181ba0bdb08c9871b50c9a16b46eea8eed20ba4b8a14e0fcf1468dbbef05a93e5a9d7dcf06898635c1fd99f5de287a" +
+			"80c594daaab19b6279fbd75070cb52eb2555c456e39e7839853874e2f0013ac0b64742d8ca10e4b79c955de8b843ce4ed464a6a72ed508091c92e7b3eedd1e1d" +
+			"d12afac321618fa3d65f9167c982f43d66a53c6a1997585b346dbf9672ff37cdbc073b2dae11453304df00815476b2a13fccdb30b957a8acafe1274002485912" +
+			"38922563e36406d37a24100b7902a028044e218453c2a399199c9d13dc40c55ba67e502273850ebdc1a2e2188b8f2d9e3cb909b8c46a2a9f4a6dd93007eafa65" +
+			"b7b3a881aa908cc74f0ad76bbbb58617c37012ca05a469fd44e62eecf1e4272ce860c0ae5eadf99b20d8f0234174006f3f110d7657d01645d4eff8f71471cbfe" +
+			"1cb2f52648727bf3c9de55153e031b4d61757db63dbf7782eeafe9018a8891362fb14759ac32bab03b349aeb5a377c5156be4c8dfbe13a684bda39cf836697c8" +
+			"94545fe0f2491acea9fc6252f4ff1e0fe72bd2df6e67a7f635e5bcc6d1a5dd951d89960887a18eb40c785cdb1f80ed42299333ab98cdd67f316cd54346585dcc" +
+			"d759fb722789b08807cc0fda293f7e5e1819bb0353517020b31d3d00374952bea2c421e862040a9ec892a05b266b7a0d0cc316f483b81af39715657ffe32ad8d" +
+			"e0c13077646035236ee5363e5f900e9a7cf850a81cd9960b6df73317226f99eaa6fff15cec34acb98246639b918ab2851466a7cdfc4ad1b52c2ae95a58d3734e" +
+			"47ddd5b7560193f644ef9c408b7dee39b4d6aabf4de761e3252d4c7ba3843187745d55e6a5db05d42b45caed43c0c5d0b64bfa9d94a4a9d8f2f0e1a108dcfd28" +
+			"8fd2bc1fc7bd675412138169cb09249875ba3b68cfb11180afae104fc9789571c6dfce02413886796ae21e3c488cc21b9f423a066c2eabf98e2fdeeb5776e4f5" +
+			"d09a515ba58cbbab3e37b09fd4f6d9244df80512e84cd7956be301cf64f1429d58577cc241f3a2c655144f81aaf95a4e108da894b38970561ae9002619fbbac9" +
+			"1fa922ed202bfc62cb08e0de2a7f3631435f8b47c8a3c563b4db4071ce74c46da6fa696a9e282d1e825d663b93bfd56c48dce1884bb10fccea063929f746443f" +
+			"d830a4232e53da21a1f2d1bdfebc3a02c10a1b8ad31d04fd616590d272ac737e98eb33af60528716bee78ec0ee8699031177277d9cff32542c67caf5f4459168" +
+			"1335ae0e178f3409a7803db83892dde5b9b7f0c750e24aef077badd678a09b850b84ec1597e4963cb5e675df1c0d6fb618496ecd76c35c798325590c2fb27a5e")
+)
+
+// hongguoV5HashTable 是 F13 压缩函数每 4 轮取一次的常数表（v5 与旧 profile 共用同一份）。
+var hongguoV5HashTable = [64]uint32{
+	0xebb64faf, 0x07aadcc2, 0xcf3187bf, 0xe01138ff, 0x6d0bfcff, 0x5a30a3be, 0xb41ad638, 0x34180eb8,
+	0xf233eb6f, 0xb1a584cc, 0xccc30dc7, 0x47d1db51, 0xd55653de, 0x70a84fa1, 0x57473c12, 0xf76f0288,
+	0x2c077f0a, 0xda0dcad0, 0xfbb86f6c, 0xfdc4cf00, 0x688a020d, 0xe676c6a6, 0x8cd6338b, 0x1a3c8d0e,
+	0xcce8b06b, 0x6ad0ed0b, 0xa0522717, 0xdc71ac83, 0x2285db71, 0xd5b4dda6, 0x736f8650, 0x6560306c,
+	0x617ce2a6, 0xe423417e, 0x0a40e143, 0x544e4032, 0x88dffb2a, 0x716c1ae0, 0x4c467a88, 0x05b23bb3,
+	0xe1d0b866, 0xbaa3dcb8, 0xae3374d3, 0xc3381a50, 0x1702f75b, 0xfe6da368, 0xf0b4cf48, 0x4e0ffbb8,
+	0x72aad10d, 0x26c53a3d, 0xf2bce0f6, 0xb4557581, 0x4a257fdd, 0x8c3182a2, 0xab0b3b86, 0x3d5dfb14,
+	0x4f103634, 0xd37b52d7, 0x444eff16, 0xeb0a33d1, 0x6ca86f6e, 0x00284ba7, 0x08387cfa, 0x5fb37586,
+}
+
+// hongguoV5Process 是同一进程内固定的两个值：SDK 会话随机串与启动时间。
+// 它们在同一个 App 生命周期里**不会变**，每次请求重新生成比复用更容易被判异常。
+var hongguoV5ProcessNonce = func() string {
+	var raw [18]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 10)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw[:])
+}()
+
+var hongguoV5ProcessStarted = time.Now().UnixMilli()
+
+// hongguoV5Profile 描述一次 v5 请求里所有「参与签名又要发给服务端」的字段。
+// 全部取自身份状态：v5 的 envelope 会把这些字段一起塞进 x-medusa，
+// 服务端只看签名自洽性，但 query 与 UA 必须与登记记录同源，否则照样空体。
+type hongguoV5Profile struct {
+	DeviceID    string
+	InstallID   string
+	CDID        string
+	VersionCode string
+	VersionName string
+	Channel     string
+	Model       string
+	Brand       string
+	OSVersion   string
+	UserAgent   string
+}
+
+// hongguoV5Device 从已登记身份还原出 v5 用的设备描述。
+// 机型 / 系统 / 渠道取登记记录（服务端会把它们与 device_id 对照），
+// 版本号取 v5 客户端常量（必须与 SDK 串配套，见 hongguoV5VersionCode）。
+func hongguoV5DeviceFromState(state hongguoIdentityState) hongguoV5Profile {
+	device := state.device()
+	return hongguoV5Profile{
+		DeviceID:    state.DeviceID,
+		InstallID:   state.InstallID,
+		CDID:        state.CDID,
+		VersionCode: hongguoV5VersionCode,
+		VersionName: hongguoV5VersionName,
+		Channel:     firstNonEmpty(device.Channel, "vivo_8662_64"),
+		Model:       firstNonEmpty(device.Model, "PGT-AN10"),
+		Brand:       firstNonEmpty(device.Brand, "HONOR"),
+		OSVersion:   firstNonEmpty(device.OSVersion, "12"),
+		UserAgent:   device.userAgent(),
+	}
+}
+
+// hongguoV5Query 是 v5 请求的 query：**只有这 13 项**。
+// 它比旧入口的 29 项短得多，多余字段会被算进签名却不在服务端预期内，
+// 所以这里严格按上游客户端的顺序与集合来，一个都不加。
+func (profile hongguoV5Profile) query(ticket int64) url.Values {
+	values := url.Values{
+		"aid":                 {"8662"},
+		"app_name":            {"novelread"},
+		"version_code":        {profile.VersionCode},
+		"version_name":        {profile.VersionName},
+		"channel":             {profile.Channel},
+		"device_platform":     {"android"},
+		"device_type":         {profile.Model},
+		"os_version":          {profile.OSVersion},
+		"update_version_code": {profile.VersionCode},
+		"iid":                 {profile.InstallID},
+		"cdid":                {profile.CDID},
+		"device_id":           {profile.DeviceID},
+		"_rticket":            {strconv.FormatInt(ticket, 10)},
+	}
+	if profile.CDID == "" {
+		values.Del("cdid")
+	}
+	return values
+}
+
+// hongguoV5Payload 是 v5 取流的请求体（未压缩）。
+// 键是 "1004"（短剧），与旧入口要求 "1" 不同；video_platform 固定 1024。
+// device_level 是 1（不是旧入口的 3）——两份上游 Go 移植都是 1，写 3 会走另一条
+// 服务端分支。
+func hongguoV5Payload(videoID string) map[string]any {
+	return map[string]any{
+		"biz_param": map[string]any{
+			"detail_page_version": 0, "device_level": 1, "disable_digg_stat": false,
+			"disable_video_relate_book": false, "need_all_video_definition": true,
+			"need_mp4_align": false, "use_os_player": false, "use_server_dns": false,
+			"video_platform": 1024,
+		},
+		"mixed_video_id_map": map[string]any{"1004": []string{videoID}},
+		"dr_scene":           "player",
+	}
+}
+
+// hongguoV5Gzip 压缩请求体。服务端校验的是**压缩后**的字节，
+// x-ss-stub 与 x-medusa 都基于压缩再算，先签后压等于自毁。
+func hongguoV5Gzip(payload []byte) ([]byte, error) {
+	var buffer bytes.Buffer
+	writer := gzip.NewWriter(&buffer)
+	if _, err := writer.Write(payload); err != nil {
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+func hongguoV5Unhex(value string) []byte {
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		panic("红果 v5 常量解码失败: " + value)
+	}
+	return decoded
+}
+
+func hongguoV5LE32(value uint32) []byte {
+	return binary.LittleEndian.AppendUint32(nil, value)
+}
+
+func hongguoV5Random() (uint32, error) {
+	var raw [4]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint32(raw[:]), nil
+}
+
+// hongguoV5SigningIV 是签名用的滚动 IV：同样的三步链既决定 Medusa 分支号，
+// 也是 F13 压缩函数的种子输入。low 4 位 == 12 才是 v5 支持的 Medusa 分支。
+func hongguoV5SigningIV(seed uint32, data []byte) uint32 {
+	for index, value := range data {
+		if index&1 == 0 {
+			seed = (seed >> 4) ^ seed ^ (seed << 6) ^ uint32(value)
+		} else {
+			seed = ^((seed >> 7) ^ seed ^ (uint32(value) | (seed << 12)))
+		}
+	}
+	return seed
+}
+
+func hongguoV5BranchOf(query string, body []byte, stamp uint32) uint32 {
+	value := hongguoV5SigningIV(0x20230928, []byte(query))
+	value = hongguoV5SigningIV(value, body)
+	return hongguoV5SigningIV(value, hongguoV5LE32(stamp)) & 15
+}
+
+// hongguoV5TuneTicket 扫描 _rticket，直到三件套算出的分支号等于 12。
+// 上游客户端也是在客户端这边扫的（服务端只认分支 12），1 秒窗口足够。
+func hongguoV5TuneTicket(profile hongguoV5Profile, body []byte, now time.Time) (string, error) {
+	stamp := uint32(now.Unix())
+	base := now.UnixMilli()
+	for offset := int64(0); offset < hongguoV5TicketSpan; offset++ {
+		query := strings.ReplaceAll(profile.query(base+offset).Encode(), "+", "%20")
+		if hongguoV5BranchOf(query, body, stamp) == hongguoV5Branch {
+			return query, nil
+		}
+	}
+	return "", errors.New("红果 v5 签名分支未命中")
+}
+
+// hongguoV5Checksum 是 F13 输出的 12 轮混淆校验和。
+func hongguoV5Checksum(data []byte) uint32 {
+	value := uint32(0x20220420)
+	for index := 0; index < 12; index++ {
+		if index&1 == 0 {
+			value = uint32(data[index]) ^ (value << 7) ^ (value >> 3) ^ value
+		} else {
+			value = ^(uint32(data[index]) | (value << 11)) ^ (value >> 5) ^ value
+		}
+	}
+	return (value | 4) ^ 0x1000000
+}
+
+// hongguoV5F13 是 v5 分支的 F13 压缩：与旧 profile 的差别是固定种子 0x9d4a97c2、
+// 固定一轮 96 次、固定寄存器替换表，最后校验和额外或上 0x20。
+func hongguoV5F13(queryHash, bodyHash []byte, stamp uint32) []byte {
+	const seed uint32 = 0x9d4a97c2
+	count := seed + stamp
+
+	data := make([]byte, 0, 64)
+	data = append(data, queryHash...)
+	data = append(data, bodyHash...)
+	data = append(data, hongguoV5LE32(stamp)...)
+	// 这 4 字节是「上游 SDK 的随机盐位」，v5 分支下是常数序列。
+	for _, value := range []uint32{0xfa, 0x45, 0x61, 0xd7} {
+		data = append(data, byte((value|value<<8)>>((count+2)&7)))
+	}
+	data = append(data, 0, 0, 0, 0, 0, 0, 0x01, 0xa0)
+
+	var schedule [128]uint32
+	for index := 0; index < 16; index++ {
+		schedule[index] = binary.BigEndian.Uint32(data[index*4:])
+	}
+	for index := 0; index < 112; index++ {
+		left, right := schedule[index+1], schedule[index+14]
+		mixed := bits.RotateLeft32(left, 14) ^ bits.RotateLeft32(left, 25) ^ (left >> 3)
+		mixed += bits.RotateLeft32(right, 13) ^ bits.RotateLeft32(right, 15) ^ (right >> 10)
+		schedule[index+16] = schedule[index] + schedule[index+9] + mixed
+	}
+
+	var table [64]uint32
+	for index, value := range hongguoV5HashTable {
+		table[index] = bits.RotateLeft32(value, -int((count+1)&31))
+	}
+
+	initial := [8]uint32{0x7aba4fc8, 0x67166507, 0x6403fa00, 0x340f512f, 984304912, 3005047866, 2874125293, 2152413264}
+	for index := range initial {
+		initial[index] = bits.RotateLeft32(initial[index], -int(count&31))
+	}
+	state := initial
+	for index := uint32(0); index < 96; index++ {
+		base := seed + index
+		n1 := ((state[4] ^ state[0]) & state[1]) ^ state[4]
+		n2 := bits.RotateLeft32(state[1], 26) ^ bits.RotateLeft32(state[1], 21) ^ bits.RotateLeft32(state[1], 7)
+		n4 := schedule[base&127] + n1 + n2 + table[base&63] + state[6]
+		n5 := bits.RotateLeft32(state[3], 30) ^ bits.RotateLeft32(state[3], 19) ^ bits.RotateLeft32(state[3], 10)
+		n6 := (state[3] & state[5]) | ((state[3] | state[5]) & state[2])
+		previous := state[7]
+		copy(state[1:], state[:7])
+		state[0] = previous + n4
+		state[7] = n5 + n6 + n4
+	}
+
+	var digest [32]byte
+	for index := range state {
+		binary.BigEndian.PutUint32(digest[index*4:], state[index]+initial[index])
+	}
+	folded := make([]byte, 16)
+	for index := range folded {
+		folded[index] = digest[index] ^ digest[index+16]
+	}
+	return append(folded, hongguoV5LE32(hongguoV5Checksum(folded)|0x20)...)
+}
+
+// hongguoV5XMXor 是 Medusa 消息体的可逆混淆（先反序、再按 4 字节循环异或、
+// 最后做三轮差分回填）。逐字节复刻上游，不可简化。
+func hongguoV5XMXor(data, key []byte) []byte {
+	out := make([]byte, len(data))
+	for index, value := range data {
+		at := (index * 4) & 28
+		first, second := key[at], key[at+1]
+		mixed := bits.RotateLeft8(value, 4) + first
+		mixed = (^mixed) ^ second
+		mixed = bits.RotateLeft8(mixed, 3)
+		mixed += second
+		mixed ^= first
+		out[len(data)-index-1] = ^mixed
+	}
+	size := len(out)
+	last := out[size-1] ^ out[size-2]
+	head := out[0]
+	out[0] = ^last + head
+	out[1] = (out[0] ^ out[size-1] ^ 254) + out[1]
+	out[2] += (last - head) ^ bits.RotateLeft8(out[1], 3) ^ 2
+	for index := 0; index < size-4; index++ {
+		mixed := bits.RotateLeft8(out[index+2], 3) ^ out[index+1] ^ byte(index+3)
+		out[index+3] = ^mixed + out[index+3]
+	}
+	out[size-1] ^= out[size-2]
+	var sum byte
+	for _, value := range out[1:] {
+		sum += value
+	}
+	out[0] = (out[0] ^ out[1]) + sum
+	return out
+}
+
+// hongguoV5Field / hongguoV5Proto 是签名信封用的最小 protobuf 编码。
+// sint 走 zigzag；uint32 直接乘 2（32 位机上 int 会掉符号，所以单独一支）。
+type hongguoV5Field struct {
+	tag   int
+	value any
+}
+
+func hongguoV5SF(tag int, value any) hongguoV5Field {
+	return hongguoV5Field{tag: tag, value: value}
+}
+
+func hongguoV5Proto(fields ...hongguoV5Field) []byte {
+	out := make([]byte, 0, 256)
+	for _, field := range fields {
+		switch value := field.value.(type) {
+		case int:
+			out = binary.AppendUvarint(out, uint64(field.tag<<3))
+			out = binary.AppendUvarint(out, uint64(int64(value)<<1)^uint64(int64(value)>>63))
+		case int64:
+			out = binary.AppendUvarint(out, uint64(field.tag<<3))
+			out = binary.AppendUvarint(out, uint64(value<<1)^uint64(value>>63))
+		case uint32:
+			out = binary.AppendUvarint(out, uint64(field.tag<<3))
+			out = binary.AppendUvarint(out, uint64(value)*2)
+		case string:
+			if value != "" {
+				out = hongguoV5ProtoBytes(out, field.tag, []byte(value))
+			}
+		case []byte:
+			out = hongguoV5ProtoBytes(out, field.tag, value)
+		}
+	}
+	return out
+}
+
+func hongguoV5ProtoBytes(out []byte, tag int, value []byte) []byte {
+	out = binary.AppendUvarint(out, uint64(tag<<3|2))
+	out = binary.AppendUvarint(out, uint64(len(value)))
+	return append(out, value...)
+}
+
+// hongguoV5AES 是 v5 专用的 AesV3 载体：分组、轮数与混合列都按 v5 sbox 与
+// v5 置换表走，与旧 Medusa 的载体不是同一套参数。
+type hongguoV5AES struct {
+	box         []byte
+	permutation [4]int
+	order       [16]int
+	keys        [48]byte
+	wire        [8]uint
+	compact     [8]uint
+}
+
+func newHongguoV5AES(key []byte, stamp uint32) *hongguoV5AES {
+	variant := stamp & 3
+	carrier := &hongguoV5AES{
+		box:         hongguoV5SBox[variant*256 : (variant+1)*256],
+		permutation: [4][4]int{{2, 0, 3, 1}, {1, 3, 2, 0}, {3, 2, 1, 0}, {2, 3, 1, 0}}[variant],
+		order: [4][16]int{
+			{0, 9, 14, 15, 4, 13, 2, 7, 8, 1, 6, 3, 12, 5, 10, 11},
+			{0, 9, 14, 11, 4, 13, 2, 3, 8, 1, 6, 15, 12, 5, 10, 7},
+			{0, 9, 14, 3, 4, 13, 2, 15, 8, 1, 6, 11, 12, 5, 10, 7},
+			{0, 9, 14, 15, 4, 13, 2, 3, 8, 1, 6, 11, 12, 5, 10, 7},
+		}[variant],
+		wire:    [8]uint{6, 5, 3, 4, 2, 7, 1, 0},
+		compact: [8]uint{1, 7, 3, 6, 2, 0, 4, 5},
+	}
+	initial := [4]uint32{0xbbb5de72, 0xd4638d5b, 0x92a5f73b, 0x89f8a1c9}[variant]
+	seed := hongguoV5LE32(initial)
+	for index := 0; index < 16; index++ {
+		carrier.keys[index] = seed[index%4] ^ key[index]
+	}
+	rounds := 8
+	for index := 4; index < 12; index++ {
+		at := 4 * (index - 1)
+		a, b, c, d := carrier.keys[at], carrier.keys[at+1], carrier.keys[at+2], carrier.keys[at+3]
+		if index&3 == 0 {
+			a, b, c, d = byte(initial>>uint(rounds&24))^carrier.box[b], carrier.box[c], carrier.box[d], carrier.box[a]
+		}
+		rounds += 2
+		carrier.keys[at+4] = a ^ carrier.keys[at-12]
+		carrier.keys[at+5] = b ^ carrier.keys[at-11]
+		carrier.keys[at+6] = c ^ carrier.keys[at-10]
+		carrier.keys[at+7] = d ^ carrier.keys[at-9]
+	}
+	return carrier
+}
+
+func (carrier *hongguoV5AES) block(value []byte) []byte {
+	var rows [4][4]byte
+	for index := range rows {
+		copy(rows[index][:], value[index*4:])
+	}
+	addRoundKey := func(round int) {
+		for row := 0; row < 4; row++ {
+			for column := 0; column < 4; column++ {
+				rows[row][column] ^= carrier.keys[round*16+row*4+carrier.permutation[column]]
+			}
+		}
+	}
+	addRoundKey(0)
+	for round := 1; round < 3; round++ {
+		previous := rows
+		for row := 0; row < 4; row++ {
+			for column := 0; column < 4; column++ {
+				rows[row][column] = carrier.box[previous[carrier.permutation[row]][column]]
+			}
+		}
+		previous = rows
+		for index, at := range carrier.order {
+			rows[index/4][index%4] = previous[at/4][at%4]
+		}
+		if round == 1 {
+			previous = rows
+			for row := 0; row < 4; row++ {
+				for column := 0; column < 4; column++ {
+					rows[row][column] = previous[row][carrier.permutation[column]]
+				}
+			}
+			xtime := func(value byte) byte {
+				if value&128 != 0 {
+					return value<<1 ^ 0x1b
+				}
+				return value << 1
+			}
+			for column := 0; column < 4; column++ {
+				all := rows[0][column] ^ rows[1][column] ^ rows[2][column] ^ rows[3][column]
+				head := rows[0][column]
+				rows[0][column] ^= all ^ xtime(rows[0][column]^rows[1][column])
+				rows[1][column] ^= all ^ xtime(rows[1][column]^rows[2][column])
+				rows[2][column] ^= all ^ xtime(rows[2][column]^rows[3][column])
+				rows[3][column] ^= all ^ xtime(rows[3][column]^head)
+			}
+		}
+		addRoundKey(round)
+	}
+	out := make([]byte, 0, 16)
+	for row := range rows {
+		for column := range rows[row] {
+			out = append(out, rows[row][column]^carrier.keys[16+row*4+column])
+		}
+	}
+	return out
+}
+
+// encrypt 把明文按位重排进 248 位载荷，用两条 CBC 链生成密钥流，
+// 再把密钥流写回原字节的特定位。返回 1 字节头 + 原长度的密文。
+func (carrier *hongguoV5AES) encrypt(source, iv []byte) []byte {
+	var plain [32]byte
+	for index := 0; index < 31; index++ {
+		for bit := 0; bit < 8; bit++ {
+			plain[index] |= ((source[index*8+bit] >> carrier.wire[bit]) & 1) << carrier.compact[bit]
+		}
+	}
+	plain[31] = 1
+	var stream []byte
+	previous := iv
+	for index := 0; index < 32; index += 16 {
+		block := append([]byte(nil), plain[index:index+16]...)
+		for at := range block {
+			block[at] ^= previous[at]
+		}
+		previous = carrier.block(block)
+		stream = append(stream, previous...)
+	}
+	out := append([]byte(nil), source...)
+	for index := 0; index < 31; index++ {
+		for bit := 0; bit < 8; bit++ {
+			at := index*8 + bit
+			out[at] = out[at]&^(byte(1)<<carrier.wire[bit]) | ((stream[index]>>carrier.compact[bit])&1)<<carrier.wire[bit]
+		}
+	}
+	return append([]byte{stream[len(stream)-1]}, out...)
+}
+
+// hongguoV5Helios 是短签名头：明文字面是 "ts-license-8662"，
+// license 必须是 v5 的 646637794（与账号那套 1588093228 不同）。
+func hongguoV5Helios(stamp, random uint32) string {
+	digest := md5.Sum(append(hongguoV5LE32(random), []byte("8662")...))
+	ascii := []byte(hex.EncodeToString(digest[:]))
+	words := make([]uint64, 0, 4)
+	for index := 0; index < 4; index++ {
+		words = append(words, binary.LittleEndian.Uint64(ascii[index*8:]))
+	}
+	left, right := words[0], words[1]
+	table := []uint64{left}
+	words = words[2:]
+	for index := 0; index < 34; index++ {
+		mixed := (bits.RotateLeft64(right, -8) + left) ^ uint64(index)
+		words = append(words, mixed)
+		mixed ^= bits.RotateLeft64(left, -61)
+		table = append(table, mixed)
+		left, right = mixed, words[0]
+		words = words[1:]
+	}
+	plain := hongguoCommentPad([]byte(strconv.FormatUint(uint64(stamp), 10) + "-" + hongguoV5License + "-8662"))
+	out := hongguoV5LE32(random)
+	for at := 0; at < len(plain); at += 16 {
+		a, b := binary.LittleEndian.Uint64(plain[at:]), binary.LittleEndian.Uint64(plain[at+8:])
+		for index := 0; index < 34; index++ {
+			b = table[index] ^ (a + bits.RotateLeft64(b, -8))
+			a = b ^ bits.RotateLeft64(a, -61)
+		}
+		out = binary.LittleEndian.AppendUint64(out, a)
+		out = binary.LittleEndian.AppendUint64(out, b)
+	}
+	return base64.StdEncoding.EncodeToString(out)
+}
+
+// hongguoV5Medusa 是长签名头：核心信封 + F13 + xmxor + AesV3 三层叠加。
+// 任何一处偏差都只会得到 HTTP 200 + 0 字节，没有可读的报错。
+func hongguoV5Medusa(profile hongguoV5Profile, query string, body []byte, stamp uint32) (string, error) {
+	return hongguoV5MedusaWith(profile, query, body, stamp, hongguoV5ProcessNonce, hongguoV5ProcessStarted, hongguoV5Random)
+}
+
+// hongguoV5MedusaWith 是可注入随机源与会话值的版本：生产走上面的包装，
+// 对照校验时用固定输入逐字节比对（上游参考实现也是这个形状）。
+func hongguoV5MedusaWith(profile hongguoV5Profile, query string, body []byte, stamp uint32,
+	nonce string, started int64, next func() (uint32, error)) (string, error) {
+	bodyHash := md5.Sum(body)
+	queryHash := hongguoSM3([]byte(query))
+	f13 := hongguoV5F13(queryHash[:], bodyHash[:], stamp)
+
+	deviceInfo := hongguoV5Proto(
+		hongguoV5SF(1, 1), hongguoV5SF(2, 2), hongguoV5SF(3, "8662"),
+		hongguoV5SF(4, profile.DeviceID), hongguoV5SF(5, nonce),
+		hongguoV5SF(6, "!noperm!"), hongguoV5SF(12, "Asia/Shanghai,8"), hongguoV5SF(13, "zh_CN"),
+		hongguoV5SF(22, profile.OSVersion), hongguoV5SF(25, started),
+		hongguoV5SF(30, profile.Model), hongguoV5SF(31, profile.Brand),
+		hongguoV5SF(32, profile.Model), hongguoV5SF(34, profile.Brand),
+	)
+	environment := hongguoV5Proto(
+		hongguoV5SF(6, hongguoV5EnvVersion), hongguoV5SF(8, profile.Channel),
+		hongguoV5SF(12, deviceInfo), hongguoV5SF(14, profile.VersionName),
+	)
+	counters := hongguoV5Proto(hongguoV5SF(1, 1), hongguoV5SF(2, 1), hongguoV5SF(3, 1), hongguoV5SF(5, 1))
+	flags := make([]byte, 8)
+
+	messageRandom, err := next()
+	if err != nil {
+		return "", err
+	}
+	message := hongguoV5Proto(
+		hongguoV5SF(1, hongguoV5Magic), hongguoV5SF(2, 5), hongguoV5SF(3, messageRandom),
+		hongguoV5SF(4, "8662"), hongguoV5SF(5, profile.DeviceID), hongguoV5SF(6, hongguoV5License),
+		hongguoV5SF(7, profile.VersionName), hongguoV5SF(8, hongguoV5ProtoVersion),
+		hongguoV5SF(9, int64(hongguoV5SDKVersionCode)), hongguoV5SF(10, flags),
+		hongguoV5SF(12, stamp), hongguoV5SF(13, f13), hongguoV5SF(14, queryHash[:6]),
+		hongguoV5SF(15, counters), hongguoV5SF(17, stamp), hongguoV5SF(20, "none"),
+		hongguoV5SF(21, 377), hongguoV5SF(23, environment),
+		hongguoV5SF(24, `{"cmr":16777216,"cmr2":16777216,"un_h":11,"vpn":0,"kd":0,"dyn":"","do":1,"tk":true}`),
+	)
+
+	random, err := next()
+	if err != nil {
+		return "", err
+	}
+	keyHash := hongguoSM3(append(append(append([]byte(nil), hongguoV5SignKey...), hongguoV5LE32(random)...), hongguoV5SignKey...))
+	high := (random >> 16) & 255
+	seed := hongguoV5LE32(^(((high << 11) | (random >> 24)) ^ (high >> 5) ^ high))
+
+	transformed := append(append([]byte(nil), flags...), hongguoV5XMXor(message, keyHash[:])...)
+	for left, right := 0, len(transformed)-1; left < right; left, right = left+1, right-1 {
+		transformed[left], transformed[right] = transformed[right], transformed[left]
+	}
+	for index := range transformed {
+		transformed[index] ^= seed[(^index)&3]
+	}
+
+	check := uint32(0x18000001) | uint32(queryHash[0]&63)<<14 | uint32(f13[0]&63)<<8
+	nonceRandom, err := next()
+	if err != nil {
+		return "", err
+	}
+	packed := append([]byte{0xca}, hongguoV5LE32(nonceRandom)...)
+	packed = append(packed, hongguoV5LE32(check)...)
+	packed = append(packed, transformed...)
+	packed = append(packed, byte(random>>16), byte(random>>24))
+
+	aesKey := md5.Sum(hongguoV5SignKey[:16])
+	aesIV := md5.Sum(hongguoV5SignKey[16:])
+	encrypted := newHongguoV5AES(aesKey[:], stamp).encrypt(packed, aesIV[:])
+
+	prefix := append(hongguoV5LE32(5), hongguoV5Magic...)
+	stampBytes := hongguoV5LE32(stamp)
+	for index := range prefix {
+		prefix[index] ^= stampBytes[index&3]
+	}
+	envelope := append(prefix, byte(random), byte(random>>8), 0, 1)
+	envelope = append(envelope, encrypted...)
+	return base64.StdEncoding.EncodeToString(envelope), nil
+}
+
+// hongguoV5Headers 一次性把 v5 三元组与配套头算齐。
+// 返回的 query 就是最终必须原样发出去的那一串，调用方不允许再改。
+//
+// 头集合刻意保持最小：v5 路径上服务端只校验三个签名头 + 压缩戳，
+// 多带 User-Agent / Accept 会让请求被判成非官方客户端（实测多带即 200+0 字节）。
+func hongguoV5Headers(profile hongguoV5Profile, body []byte, now time.Time) (string, http.Header, error) {
+	query, err := hongguoV5TuneTicket(profile, body, now)
+	if err != nil {
+		return "", nil, err
+	}
+	header, err := hongguoV5HeaderFor(profile, query, body, uint32(now.Unix()))
+	if err != nil {
+		return "", nil, err
+	}
+	return query, header, nil
+}
+
+// hongguoV5HeaderFor 在 query 已定稿的前提下算出整套头。
+//
+// 头集合照抄上游 MobilePlayback.kt：User-Agent + Accept + Content-Encoding + x-ss-stub
+// + 三元组，再补一个 Content-Type。UA 用登记时那台机的 UA，保证与 query 里的机型同源。
+func hongguoV5HeaderFor(profile hongguoV5Profile, query string, body []byte, stamp uint32) (http.Header, error) {
+	medusa, err := hongguoV5Medusa(profile, query, body, stamp)
+	if err != nil {
+		return nil, err
+	}
+	heliosRandom, err := hongguoV5Random()
+	if err != nil {
+		return nil, err
+	}
+	bodySum := hongguoV5BodySum(body)
+	header := make(http.Header)
+	header.Set("User-Agent", profile.UserAgent)
+	header.Set("Accept", "application/json")
+	header.Set("Content-Type", "application/json; charset=utf-8")
+	header.Set("Content-Encoding", "gzip")
+	header.Set("X-Ss-Stub", strings.ToUpper(hex.EncodeToString(bodySum[:])))
+	header.Set("X-Khronos", strconv.FormatUint(uint64(stamp), 10))
+	header.Set("X-Helios", hongguoV5Helios(stamp, heliosRandom))
+	header.Set("X-Medusa", medusa)
+	return header, nil
+}
+
+func hongguoV5BodySum(body []byte) [16]byte {
+	return md5.Sum(body)
+}

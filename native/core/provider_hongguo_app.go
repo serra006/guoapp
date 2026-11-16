@@ -19,9 +19,15 @@ import (
 
 const hongguoAppBaseURL = "https://api5-normal-sinfonlineb.fqnovel.com"
 
+// hongguoPlaybackBaseURL 是取流专用集群（a 集群）。两个集群的准入策略不同：
+// 目录/详情/弹幕在 b 集群、取流在 a 集群，同一个 path 换集群调用不通用。
+const hongguoPlaybackBaseURL = "https://api5-normal-sinfonlinea.fqnovel.com"
+
 const hongguoAppUserAgent = "com.phoenix.read/73532 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)"
 
-// hongguoAppMultiVideoModelPath 是当前唯一稳定可用的取流入口（2026-11 实测）。
+// hongguoAppMultiVideoModelPath 是 b 集群的批量取流入口，现作为回退入口。
+// 首选入口是 a 集群的 hongguoPlaybackVideoModelPath（见 provider_hongguo_playback_sign.go），
+// 两条的集群与 payload 形状都不同，不能互相顶替。
 const hongguoAppMultiVideoModelPath = "/novel/player/multi_video_model/v1/"
 
 // errHongguoAppEmpty 表示红果返回 HTTP 200 + 0 字节。这是「身份不被接受 / 触发风控」
@@ -62,7 +68,8 @@ type hongguoAppClient struct {
 	danmaku        map[string]hongguoDanmakuCacheEntry
 	danmakuPending map[string]*hongguoDanmakuCall
 	// 设备登记身份（取流用）。与 state.DeviceID/InstallID 分开存：目录/详情/弹幕
-	// 继续用原有随机身份 + 三签名，取流切到登记身份 + 不签名，互不影响。
+	// 继续用原有随机身份 + 播放签名打 b 集群，取流用登记身份 + Argus 551 打 a 集群，
+	// 两边互不影响。
 	identityMu     sync.Mutex
 	identityLoaded bool
 	identity       hongguoIdentityState
@@ -193,12 +200,14 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 		request.Header.Set("X-XS-From-Web", "0")
 		request.Header.Set("Sdk-Version", "2")
 		comment, _ := ctx.Value(hongguoCommentKey{}).(bool)
-		// 红果自 2026-10 起对 App 全接口（目录/详情/取流）都要求完整三签名
-		// X-Gorgon + X-Argus + X-Ladon，且**播放/目录与弹幕用的是两套不同签名**：
+		// 红果自 2026-10 起对 App 目录/详情接口要求完整三签名
+		// X-Gorgon + X-Argus + X-Ladon，且**目录/详情与弹幕用的是两套不同签名**：
 		// 弹幕签名（provider_hongguo_comment_sign.go）的 Argus 缺 device_id、
-		// 机型环境等字段，打到 video_detail / landpage / video_model 一律返回
+		// 机型环境等字段，打到 video_detail / landpage 一律返回
 		// HTTP 200 + 0 字节；必须改用播放签名（provider_hongguo_player_sign.go）。
 		// 该签名会对 body 计算 X-SS-STUB 并写入 Argus 的 body 摘要。
+		// 取流是第三套（Argus 551，provider_hongguo_playback_sign.go），
+		// 走 hongguoAppPlaybackRequest，不在这里。
 		var commentNonce hongguoCommentNonce
 		if comment {
 			commentNonce, err = newHongguoCommentNonce()
@@ -263,36 +272,50 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 	return nil, lastErr
 }
 
-// hongguoPlaybackQuery 构造取流请求的 query。参数集合与 hongguoAppRequest 的公共
-// 部分一致，但 device_id/iid 换成设备登记接口下发的身份。
-func hongguoPlaybackQuery(deviceID, installID string) url.Values {
-	return url.Values{
-		"aid": {"8662"}, "app_name": {"novelread"}, "version_code": {hongguoRegisterVersion},
-		"version_name": {hongguoRegisterVersionNa}, "manifest_version_code": {hongguoRegisterVersion},
-		"update_version_code": {hongguoRegisterVersion}, "channel": {"update_64"},
+// hongguoPlaybackQuery 构造取流请求的 query。
+//
+// 机型、cdid、openudid 一律取自身份状态 —— 服务端会把它们与登记记录逐字段比对，
+// 换值等于换设备，结果是 HTTP 200 + 0 字节空体，从外面看与接口挂掉没有区别。
+// 所以这里一个字段都不写死，"25053RT47C" 那台固定机早就被静默拉黑了。
+//
+// ts / _rticket 是时间戳，发送前由调用方用**同一次 now** 重写成签名用的那一秒，
+// 这里不预先填：填了也会被覆盖，留着反而容易误以为它已经定了。
+func hongguoPlaybackQuery(state hongguoIdentityState) url.Values {
+	device := state.device()
+	values := url.Values{
+		"iid": {state.InstallID}, "device_id": {state.DeviceID}, "ac": {"wifi"}, "channel": {device.Channel},
+		"aid": {hongguoPlaybackAID}, "app_name": {"novelread"}, "cdid": {state.CDID},
+		"version_code": {hongguoRegisterVersion}, "version_name": {hongguoRegisterVersionNa},
 		"device_platform": {"android"}, "os": {"android"}, "ssmix": {"a"},
-		"device_type": {"25053RT47C"}, "device_brand": {"Redmi"}, "language": {"zh"},
-		"os_api": {"36"}, "os_version": {"16"}, "resolution": {"1280*2772"},
-		"dpi": {"520"}, "ac": {"wifi"},
-		"device_id": {deviceID}, "iid": {installID},
+		"device_type": {device.Model}, "device_brand": {device.Brand}, "language": {"zh"},
+		"os_api": {device.OSAPI}, "os_version": {device.OSVersion},
+		"manifest_version_code": {hongguoRegisterVersion}, "resolution": {device.queryResolution()},
+		"dpi": {device.DPI}, "update_version_code": {hongguoRegisterVersion},
+		"host_abi": {"arm64-v8a"}, "dragon_device_type": {"phone"},
+		"pv_player": {hongguoRegisterVersion}, "compliance_status": {"0"},
+		"need_personal_recommend": {"1"}, "player_so_load": {"1"}, "is_android_pad_screen": {"0"},
+		"openudid": {state.OpenUDID},
 	}
+	// 回落到内存随机身份时没有 cdid/openudid，空串比「不带这个参数」更容易被判异常。
+	if state.CDID == "" {
+		values.Del("cdid")
+	}
+	if state.OpenUDID == "" {
+		values.Del("openudid")
+	}
+	return values
 }
 
-// hongguoAppPlaybackRequest 是取流专用的发送路径：**登记身份 + 可选三签名**。
+// hongguoAppPlaybackRequest 是取流专用的发送路径：**登记身份 + 登记机型 + 551 签名**。
 //
-// 红果对播放接口的准入反复开合，实测过两轮相反的结论：
-//   - 2026-11-01：带 X-Gorgon/X-Argus/X-Ladon 一律 200 + 0 字节，不带才返回 video_model；
-//   - 2026-11-03：反过来 —— 不带签名一律 200 + 0 字节，**必须**带播放签名
-//     （provider_hongguo_player_sign.go 那套，弹幕签名仍无效）。
+// 与 hongguoAppRequest（目录/详情/弹幕）的分工是刻意分开的：那边用内存随机身份 +
+// 播放签名（ac1adaae 那套）打 b 集群，这边用登记身份 + Argus 551 打 a 集群。
+// 两者的身份、机型、UA、域名、签名四件事都不一样，混用任何一件都只会拿到空体。
 //
-// 两种状态下唯一恒定的是：device_id/iid 必须是设备登记接口下发的身份。本地随机身份
-// 即使签名也只会拿到空响应。所以这里固定用登记身份，签名与否由 signed 参数决定，
-// 由调用方按「先签、空响应再退不签」的顺序试，不再把某一轮结论写死。
-//
-// 不复用 hongguoAppRequest 的原因：它只认 client.state 里那套随机身份，而目录/详情/
-// 弹幕正是靠那套身份 + 签名工作的，改它会连带把目录打挂。可复用的只有限流器、
-// d.client 传输层与 20 秒超时，这三点都由 doPreparedCatalogRequest 统一负责。
-func (downloader *Downloader) hongguoAppPlaybackRequest(ctx context.Context, path, deviceID, installID string, payload any, signed bool) (map[string]any, error) {
+// signed=false 的路径保留着：红果在播放接口上对签名的要求历史上开合过两轮
+// （2026-11-01 要无签名，2026-11-03 要签名），把某一轮结论写死会在下一次开合时
+// 整体失效。调用方按「先签、空响应再退不签」的顺序试，见 hongguoPlaybackAttempt。
+func (downloader *Downloader) hongguoAppPlaybackRequest(ctx context.Context, base, path string, state hongguoIdentityState, payload any, signed bool) (map[string]any, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, errors.New("无法准备红果取流请求")
@@ -304,34 +327,43 @@ func (downloader *Downloader) hongguoAppPlaybackRequest(ctx context.Context, pat
 		sum := md5.Sum(body)
 		stub = strings.ToUpper(hex.EncodeToString(sum[:]))
 	}
-	client := downloader.hongguoClient()
-	client.mu.Lock()
-	base := client.baseURL
-	client.mu.Unlock()
-	query := hongguoPlaybackQuery(deviceID, installID)
+	device := state.device()
+	query := hongguoPlaybackQuery(state)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(base, "/")+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, errors.New("无法准备红果取流请求")
 	}
-	request.Header.Set("User-Agent", hongguoAppUserAgent)
+	// UA 必须是登记时那台机，UA 里的机型与服务端记录不一致同样判异常。
+	request.Header.Set("User-Agent", device.userAgent())
 	request.Header.Set("Content-Type", "application/json; charset=utf-8")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("X-Xs-From-Web", "0")
 	request.Header.Set("Sdk-Version", "2")
+	// x-ss-dp 不带时服务端不认 app 归属；lc 与 x-reading-request 是阅读侧客户端的
+	// 标配头，缺任何一个都会被当作非官方客户端。
+	request.Header.Set("X-SS-DP", hongguoPlaybackAID)
+	request.Header.Set("lc", "101")
 	if stub != "" {
 		request.Header.Set("X-Ss-Stub", stub)
 	}
+	// 登记下发的游客票据必须带回服务端：只有 device_id/iid 而没有 ttreq 时，
+	// 播放接口返回 HTTP 200 + 0 字节。没有票据（老身份文件）就不带这个头。
+	if state.TTReq != "" {
+		request.Header.Set("Cookie", hongguoGuestCookie(state))
+	}
 	response, err := downloader.doPreparedCatalogRequest(request, 20*time.Second, func(prepared *http.Request) {
-		if signed {
-			// _rticket 必须写在签名之前：签名把 query 一起算进 X-Gorgon，
-			// 签完再改 query 等于自毁签名。
-			query.Set("_rticket", strconv.FormatInt(time.Now().UnixMilli(), 10))
-			prepared.URL.RawQuery = query.Encode()
-			signHongguoPlayerRequest(prepared, body, time.Now())
-			return
-		}
+		now := time.Now()
+		ticket := now.UnixMilli()
+		// ts / _rticket 必须写在签名之前：签名把 query 一起算进 X-Argus，
+		// 签完再改 query 等于自毁签名。
+		query.Set("ts", strconv.FormatUint(uint64(now.Unix()), 10))
+		query.Set("_rticket", strconv.FormatInt(ticket, 10))
 		prepared.URL.RawQuery = query.Encode()
+		prepared.Header.Set("x-reading-request", hongguoPlaybackReadingRequest(ticket))
+		if signed {
+			signHongguoPlaybackRequest(prepared, body, now, state.DeviceID, state.InstallID, hongguoRegisterVersionNa)
+		}
 	})
 	if err != nil {
 		return nil, fmt.Errorf("红果取流请求失败: %w", publicError(err))
