@@ -20,7 +20,8 @@ import (
 //   - body 必须是 gzip 之后的字节，签名与 x-ss-stub 都基于压缩后的内容；
 //   - 头只留 Content-Type / Content-Encoding / x-ss-stub 与三元组，
 //     多带 User-Agent、Accept 会被判成非官方客户端；
-//   - query 里只有 13 项，且 ts/_rticket 参与签名，签完不能改。
+//   - query 是 29 项、顺序固定，`_rticket` 落在第 4 槽，ts/_rticket 参与签名，
+//     签完不能改（签名串与发送串必须是同一份字节）。
 func (downloader *Downloader) hongguoV5PlaybackRequest(ctx context.Context, state hongguoIdentityState, videoID string) (map[string]any, error) {
 	raw, err := json.Marshal(hongguoV5Payload(videoID))
 	if err != nil {
@@ -116,6 +117,21 @@ const (
 	hongguoV5RotatePenalty  = 5 * time.Second
 )
 
+// 两个只影响「换号策略」的可调项，默认值就是正式逻辑：
+//   - hongguoV5RotateAttempts：一次取流最多用几个身份。正式值 2 = 空响应时换一个号再试。
+//     站方发的号里约有一半是坏号，且坏了就是整号失效（同一号连问三次全空、
+//     好号连问三次全通）。排查期会临时调到 3 来区分「签名不对」与「撞上坏号」。
+//   - hongguoV5RotateBypass：跳过 30 秒冷却闸门。**只给排查用**，正式逻辑必须
+//     让冷却生效，否则用户连点播放会打出一串陌生人登记。
+var (
+	// 2 = 空响应时换一个新登记的身份再试一次。站方发的号约有一半是坏号，
+	// 且坏号是号级、永久、响应上看不出来的（同一号连问三次全空，好号连问三次全通），
+	// 所以只发一次会有约一半的假失败面；换一次号把失败面压到约 1/4。
+	// 不要调到 3 以上：注册有配额（约 30 个后要退避 10 分钟），用户连点播放会打爆发号。
+	hongguoV5RotateAttempts = 2
+	hongguoV5RotateBypass   = false
+)
+
 var hongguoV5RotateGate struct {
 	mu    sync.Mutex
 	until time.Time
@@ -137,26 +153,31 @@ func hongguoV5RotateClosed(now time.Time, rotated bool) {
 	hongguoV5RotateGate.mu.Unlock()
 }
 
-// hongguoV5Attempt 是完整的 v5 取流尝试：先用当前身份，空响应就换一次身份再试。
+// hongguoV5Attempt 是完整的 v5 取流尝试：先用当前身份，空响应就换身份再试。
 //
 // 只有「空响应 / 没有本次 vid」才换身份；HTTP 异常、业务码非 0、JSON 坏掉都不换
 // （上游同样明确：混合失败、只有 video-info 为空、服务端给了 Retry-After 都不触发）。
+//
+// 换号次数由 hongguoV5RotateAttempts 控制（默认 1 = 不换号，与当前线上行为一致）。
 func (downloader *Downloader) hongguoV5Attempt(ctx context.Context, state hongguoIdentityState, videoID string) (providerMedia, error) {
 	media, err := downloader.hongguoV5Once(ctx, state, videoID)
-	if err == nil || !hongguoV5Retryable(err) || ctx.Err() != nil {
-		return media, err
+	for attempt := 1; attempt < hongguoV5RotateAttempts; attempt++ {
+		if err == nil || !hongguoV5Retryable(err) || ctx.Err() != nil {
+			return media, err
+		}
+		now := time.Now()
+		if !hongguoV5RotateBypass && !hongguoV5RotateAllowed(now) {
+			return providerMedia{}, err
+		}
+		replacement, registerErr := downloader.hongguoPlaybackIdentityState(ctx, true)
+		if registerErr != nil || !hongguoIdentityValid(replacement) {
+			hongguoV5RotateClosed(now, false)
+			return providerMedia{}, err
+		}
+		hongguoV5RotateClosed(now, true)
+		media, err = downloader.hongguoV5Once(ctx, replacement, videoID)
 	}
-	now := time.Now()
-	if !hongguoV5RotateAllowed(now) {
-		return providerMedia{}, err
-	}
-	replacement, registerErr := downloader.hongguoPlaybackIdentityState(ctx, true)
-	if registerErr != nil || !hongguoIdentityValid(replacement) {
-		hongguoV5RotateClosed(now, false)
-		return providerMedia{}, err
-	}
-	hongguoV5RotateClosed(now, true)
-	return downloader.hongguoV5Once(ctx, replacement, videoID)
+	return media, err
 }
 
 func (downloader *Downloader) hongguoV5Once(ctx context.Context, state hongguoIdentityState, videoID string) (providerMedia, error) {

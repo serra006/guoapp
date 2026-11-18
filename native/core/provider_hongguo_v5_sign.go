@@ -27,9 +27,9 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math/bits"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -54,7 +54,50 @@ const (
 	hongguoV5Branch = 12
 	// hongguoV5TicketSpan 是 _rticket 的搜索窗口：1 秒内必然能扫到分支 12。
 	hongguoV5TicketSpan = 1024
+
+	// 下面这组是 v5 请求的**设备档案**，全部固定，不取登记机型。
+	//
+	// 取值来源：beilunyang/openhongguo **v0.3.1**（2026-11-18T01:18 的
+	// "fix(playback): send the V5 request the way the 7.4.3.32 client does"）：
+	// sdk/model/device.go 的 `model.DefaultDevice` + internal/protocol/playback_v5.go。
+	// 那一版把整条请求形状对齐到 7.4.3.32 客户端：query 29 项、_rticket 落第 4 槽、
+	// UA 是 Cronet 形态但版本号 74332、设备档案跟着它的 DefaultDevice 走。
+	//
+	// 只有 DeviceID / InstallID / CDID 仍取自身份状态（每次登记独有，写死等于所有
+	// 安装共用一个设备）。
+	hongguoV5Package     = "com.phoenix.read"
+	hongguoV5DeviceModel = "23127PN0CC"
+	hongguoV5DeviceBrand = "Xiaomi"
+	hongguoV5OSVersion   = "14"
+	hongguoV5OSAPI       = "34"
+	hongguoV5Resolution  = "1200*2670"
+	hongguoV5DPI         = "460"
+	hongguoV5Channel     = "xiaomi_8662_64"
+	hongguoV5Build       = "UKQ1.230804.001"
+	// hongguoV5EnvelopeBrand 是信封 field 31 / 34 里的品牌串。
+	// v0.3.1 的 medusa 把这两位**写死成 HONOR**（与 query 的 device_brand 不同源），
+	// 照抄，否则签名自洽性与上游对不上。
+	hongguoV5EnvelopeBrand = "HONOR"
+	// hongguoV5Accept 是 v5 播放请求的 Accept 原文（带 protobuf 后缀）。
+	hongguoV5Accept = "application/json; charset=utf-8,application/x-protobuf"
+	// 对应 DefaultDevice 的非平板形态（dragon_device_type / is_android_pad_screen）。
+	hongguoV5DragonDeviceType = "phone"
+	hongguoV5PadScreen        = "0"
+	// hongguoV5HostABI 与 language 是客户端的固定取值。
+	hongguoV5HostABI  = "arm64-v8a"
+	hongguoV5Language = "zh"
 )
+
+// hongguoV5UserAgent 拼 v5 播放请求的 UA。
+//
+// 形态是 App 的 Cronet UA（与登记侧同一个模板），但**版本号必须是 74332**：
+// v5 信封里的 SDK 是 v04.10.03，对应 7.4.x。用登记侧的 73532 会造出
+// 「7.3.5 客户端装着 7.4.3 SDK」这种线上不存在的指纹，服务端统一回 200 + 0 字节。
+// 模板逐字来自 openhongguo v0.3.1 的 protocol.PlaybackUserAgent。
+func hongguoV5UserAgent() string {
+	return fmt.Sprintf("%s/%s (Linux; U; Android %s; zh_CN; %s; Build/%s; Cronet/TTNetVersion:8d40f833 2026-03-03 QuicVersion:21ac1950 2025-11-18)",
+		hongguoV5Package, hongguoV5VersionCode, hongguoV5OSVersion, hongguoV5DeviceModel, hongguoV5Build)
+}
 
 var (
 	hongguoV5Magic   = hongguoV5Unhex("2d4b4fca49750d433fb5ae2c226dcc56")
@@ -104,8 +147,8 @@ var hongguoV5ProcessNonce = func() string {
 var hongguoV5ProcessStarted = time.Now().UnixMilli()
 
 // hongguoV5Profile 描述一次 v5 请求里所有「参与签名又要发给服务端」的字段。
-// 全部取自身份状态：v5 的 envelope 会把这些字段一起塞进 x-medusa，
-// 服务端只看签名自洽性，但 query 与 UA 必须与登记记录同源，否则照样空体。
+// 设备档案（版本 / 机型 / 品牌 / 系统 / 分辨率 / 渠道 / UA）一律取 v5 常量集，
+// 只有设备身份三件套取自身份状态，见 hongguoV5DeviceFromState。
 type hongguoV5Profile struct {
 	DeviceID    string
 	InstallID   string
@@ -116,51 +159,122 @@ type hongguoV5Profile struct {
 	Model       string
 	Brand       string
 	OSVersion   string
+	OSAPI       string
+	Resolution  string
+	DPI         string
+	Build       string
 	UserAgent   string
+	// State 是登记侧的原始身份。它只用于两件与签名无关的事：
+	// Cookie 头里的 ttreq / store-region，以及 x-reading-request 的时间戳。
+	State hongguoIdentityState
 }
 
-// hongguoV5Device 从已登记身份还原出 v5 用的设备描述。
-// 机型 / 系统 / 渠道取登记记录（服务端会把它们与 device_id 对照），
-// 版本号取 v5 客户端常量（必须与 SDK 串配套，见 hongguoV5VersionCode）。
+// hongguoV5DeviceFromState 还原 v5 请求的设备描述。
+//
+// 设备档案全部固定（hongguoV5UserAgent() / Model / Brand / OSVersion / OSAPI /
+// Resolution / DPI / Build / Channel），**不再**沿用登记时的机型。原因有两条：
+//  1. 上游三份实现都是写死这套，且查询串、信封、UA 三者逐字段一致；
+//  2. 登记侧是 7.3.5.32 的客户端（Cronet UA），v5 信封是 7.4.3.32 + v04.10.03 SDK。
+//     把登记机型与 Cronet UA 搬进 v5 请求，就会出现「7.3.5 的客户端装着 7.4.3 的
+//     SDK」这种不可能的指纹，服务端统一回 HTTP 200 + 0 字节。
+//
+// DeviceID / InstallID / CDID 仍取自身份状态：它们是每次登记独有的，写死等于所有
+// 安装共用一个设备。
 func hongguoV5DeviceFromState(state hongguoIdentityState) hongguoV5Profile {
-	device := state.device()
 	return hongguoV5Profile{
 		DeviceID:    state.DeviceID,
 		InstallID:   state.InstallID,
 		CDID:        state.CDID,
 		VersionCode: hongguoV5VersionCode,
 		VersionName: hongguoV5VersionName,
-		Channel:     firstNonEmpty(device.Channel, "vivo_8662_64"),
-		Model:       firstNonEmpty(device.Model, "PGT-AN10"),
-		Brand:       firstNonEmpty(device.Brand, "HONOR"),
-		OSVersion:   firstNonEmpty(device.OSVersion, "12"),
-		UserAgent:   device.userAgent(),
+		Channel:     hongguoV5Channel,
+		Model:       hongguoV5DeviceModel,
+		Brand:       hongguoV5DeviceBrand,
+		OSVersion:   hongguoV5OSVersion,
+		OSAPI:       hongguoV5OSAPI,
+		Resolution:  hongguoV5Resolution,
+		DPI:         hongguoV5DPI,
+		Build:       hongguoV5Build,
+		UserAgent:   hongguoV5UserAgent(),
+		State:       state,
 	}
 }
 
-// hongguoV5Query 是 v5 请求的 query：**只有这 13 项**。
-// 它比旧入口的 29 项短得多，多余字段会被算进签名却不在服务端预期内，
-// 所以这里严格按上游客户端的顺序与集合来，一个都不加。
-func (profile hongguoV5Profile) query(ticket int64) url.Values {
-	values := url.Values{
-		"aid":                 {"8662"},
-		"app_name":            {"novelread"},
-		"version_code":        {profile.VersionCode},
-		"version_name":        {profile.VersionName},
-		"channel":             {profile.Channel},
-		"device_platform":     {"android"},
-		"device_type":         {profile.Model},
-		"os_version":          {profile.OSVersion},
-		"update_version_code": {profile.VersionCode},
-		"iid":                 {profile.InstallID},
-		"cdid":                {profile.CDID},
-		"device_id":           {profile.DeviceID},
-		"_rticket":            {strconv.FormatInt(ticket, 10)},
+// hongguoV5Pairs 按 7.4.3.32 客户端实际发送的顺序给出 v5 请求的 29 项 query。
+//
+// 三处不能动：
+//   - **顺序**参与签名（SM3 对整串摘要），所以不能用 url.Values 的字母序；
+//   - `_rticket` 必须留在**第 4 位**（0 基索引 3），值由签名阶段就地填入；
+//   - `ssmix=a`、`ac=wifi`、`player_so_load=1`、`compliance_status=0` 这些看着像
+//     噪音的项，缺席时服务端会把请求归到另一条（不下发码流的）分支。
+//
+// 逐项对应 openhongguo v0.3.1 的 protocol.PlaybackV5Pairs。
+func (profile hongguoV5Profile) pairs() [][2]string {
+	return [][2]string{
+		{"device_platform", "android"},
+		{"os", "android"},
+		{"ssmix", "a"},
+		{"_rticket", ""},
+		{"cdid", profile.CDID},
+		{"channel", profile.Channel},
+		{"aid", hongguoPlaybackAID},
+		{"app_name", "novelread"},
+		{"version_code", profile.VersionCode},
+		{"version_name", profile.VersionName},
+		{"manifest_version_code", profile.VersionCode},
+		{"update_version_code", profile.VersionCode},
+		{"resolution", profile.Resolution},
+		{"dpi", profile.DPI},
+		{"device_type", profile.Model},
+		{"device_brand", profile.Brand},
+		{"language", hongguoV5Language},
+		{"os_api", profile.OSAPI},
+		{"os_version", profile.OSVersion},
+		{"ac", "wifi"},
+		{"host_abi", hongguoV5HostABI},
+		{"dragon_device_type", hongguoV5DragonDeviceType},
+		{"pv_player", profile.VersionCode},
+		{"compliance_status", "0"},
+		{"need_personal_recommend", "1"},
+		{"player_so_load", "1"},
+		{"is_android_pad_screen", hongguoV5PadScreen},
+		{"iid", profile.InstallID},
+		{"device_id", profile.DeviceID},
 	}
-	if profile.CDID == "" {
-		values.Del("cdid")
+}
+
+// hongguoV5Escape 是 query 分量的转义。
+//
+// 比 url.QueryEscape 多保留 `-_.!~*'()` 这几个字符（官方客户端就是这么转的），
+// 且**不会**把空格编成 `+`。签名摘要吃的是这串字节，多转一个字符就等于换了一个
+// 请求，所以这里不能图省事交给 net/url。
+func hongguoV5Escape(value string) string {
+	const unreserved = "-_.!~*'()"
+	var builder strings.Builder
+	builder.Grow(len(value))
+	for index := 0; index < len(value); index++ {
+		char := value[index]
+		if (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') ||
+			(char >= '0' && char <= '9') || strings.IndexByte(unreserved, char) >= 0 {
+			builder.WriteByte(char)
+			continue
+		}
+		builder.WriteByte('%')
+		builder.WriteByte("0123456789ABCDEF"[char>>4])
+		builder.WriteByte("0123456789ABCDEF"[char&15])
 	}
-	return values
+	return builder.String()
+}
+
+// hongguoV5EncodePairs 把有序 pair 拼成 query 串。
+//
+// 拼出来的这一串同时用于**签名**和**发送**，中间不允许再经过任何编码器。
+func hongguoV5EncodePairs(pairs [][2]string) string {
+	parts := make([]string, len(pairs))
+	for index, pair := range pairs {
+		parts[index] = hongguoV5Escape(pair[0]) + "=" + hongguoV5Escape(pair[1])
+	}
+	return strings.Join(parts, "&")
 }
 
 // hongguoV5Payload 是 v5 取流的请求体（未压缩）。
@@ -227,19 +341,49 @@ func hongguoV5SigningIV(seed uint32, data []byte) uint32 {
 	return seed
 }
 
+// hongguoV5BranchOf 算 Medusa 分支门禁的低 4 位。
+//
+// 上游式（internal/protocol/sign/playback_v5.go Sign）：
+//
+//	getIV(getIV(getIV(0x20230928, sm3(query)), md5(gzipBody)), le32(ts)) & 15 == 12
+//
+// 注意一、二两段的入参都是**摘要**，不是原文：第一段吃 sm3(query) 的 32 字节，
+// 第二段吃 md5(压缩后 body) 的 16 字节。喂原文时链长从 48 字节变成两百多字节，
+// 算出来的 nibble 与服务端重算的完全是两个数——服务端只有 1/16 的概率和我们撞上，
+// 剩下 15/16 会被判成「分支不支持」而静默回 200 + 0 字节。
+//
+// hongguoV5SigningIV 与上游 getIV 逐行等价，这里只换入参，函数本身不动。
 func hongguoV5BranchOf(query string, body []byte, stamp uint32) uint32 {
-	value := hongguoV5SigningIV(0x20230928, []byte(query))
-	value = hongguoV5SigningIV(value, body)
+	queryHash := hongguoSM3([]byte(query))
+	bodyHash := md5.Sum(body)
+	value := hongguoV5SigningIV(0x20230928, queryHash[:])
+	value = hongguoV5SigningIV(value, bodyHash[:])
 	return hongguoV5SigningIV(value, hongguoV5LE32(stamp)) & 15
 }
 
 // hongguoV5TuneTicket 扫描 _rticket，直到三件套算出的分支号等于 12。
-// 上游客户端也是在客户端这边扫的（服务端只认分支 12），1 秒窗口足够。
+//
+// `_rticket` 是**就地**填进第 4 槽的，不改参数顺序：上游 Sign() 先找到已有的
+// `_rticket` 槽位再逐个 offset 覆写，只有完全找不到时才追加到末尾。
+// 返回的这一串既是签名输入，也是最终发出去的 query——调用方不许再编码一次。
 func hongguoV5TuneTicket(profile hongguoV5Profile, body []byte, now time.Time) (string, error) {
 	stamp := uint32(now.Unix())
 	base := now.UnixMilli()
+	pairs := profile.pairs()
+	slot := -1
+	for index := range pairs {
+		if pairs[index][0] == "_rticket" {
+			slot = index
+			break
+		}
+	}
+	if slot < 0 {
+		pairs = append(pairs, [2]string{"_rticket", ""})
+		slot = len(pairs) - 1
+	}
 	for offset := int64(0); offset < hongguoV5TicketSpan; offset++ {
-		query := strings.ReplaceAll(profile.query(base+offset).Encode(), "+", "%20")
+		pairs[slot][1] = strconv.FormatInt(base+offset, 10)
+		query := hongguoV5EncodePairs(pairs)
 		if hongguoV5BranchOf(query, body, stamp) == hongguoV5Branch {
 			return query, nil
 		}
@@ -577,12 +721,12 @@ func hongguoV5MedusaWith(profile hongguoV5Profile, query string, body []byte, st
 	f13 := hongguoV5F13(queryHash[:], bodyHash[:], stamp)
 
 	deviceInfo := hongguoV5Proto(
-		hongguoV5SF(1, 1), hongguoV5SF(2, 2), hongguoV5SF(3, "8662"),
+		hongguoV5SF(1, 1), hongguoV5SF(2, 2), hongguoV5SF(3, hongguoPlaybackAID),
 		hongguoV5SF(4, profile.DeviceID), hongguoV5SF(5, nonce),
 		hongguoV5SF(6, "!noperm!"), hongguoV5SF(12, "Asia/Shanghai,8"), hongguoV5SF(13, "zh_CN"),
 		hongguoV5SF(22, profile.OSVersion), hongguoV5SF(25, started),
-		hongguoV5SF(30, profile.Model), hongguoV5SF(31, profile.Brand),
-		hongguoV5SF(32, profile.Model), hongguoV5SF(34, profile.Brand),
+		hongguoV5SF(30, profile.Model), hongguoV5SF(31, hongguoV5EnvelopeBrand),
+		hongguoV5SF(32, profile.Model), hongguoV5SF(34, hongguoV5EnvelopeBrand),
 	)
 	environment := hongguoV5Proto(
 		hongguoV5SF(6, hongguoV5EnvVersion), hongguoV5SF(8, profile.Channel),
@@ -597,7 +741,7 @@ func hongguoV5MedusaWith(profile hongguoV5Profile, query string, body []byte, st
 	}
 	message := hongguoV5Proto(
 		hongguoV5SF(1, hongguoV5Magic), hongguoV5SF(2, 5), hongguoV5SF(3, messageRandom),
-		hongguoV5SF(4, "8662"), hongguoV5SF(5, profile.DeviceID), hongguoV5SF(6, hongguoV5License),
+		hongguoV5SF(4, hongguoPlaybackAID), hongguoV5SF(5, profile.DeviceID), hongguoV5SF(6, hongguoV5License),
 		hongguoV5SF(7, profile.VersionName), hongguoV5SF(8, hongguoV5ProtoVersion),
 		hongguoV5SF(9, int64(hongguoV5SDKVersionCode)), hongguoV5SF(10, flags),
 		hongguoV5SF(12, stamp), hongguoV5SF(13, f13), hongguoV5SF(14, queryHash[:6]),
@@ -648,15 +792,12 @@ func hongguoV5MedusaWith(profile hongguoV5Profile, query string, body []byte, st
 
 // hongguoV5Headers 一次性把 v5 三元组与配套头算齐。
 // 返回的 query 就是最终必须原样发出去的那一串，调用方不允许再改。
-//
-// 头集合刻意保持最小：v5 路径上服务端只校验三个签名头 + 压缩戳，
-// 多带 User-Agent / Accept 会让请求被判成非官方客户端（实测多带即 200+0 字节）。
 func hongguoV5Headers(profile hongguoV5Profile, body []byte, now time.Time) (string, http.Header, error) {
 	query, err := hongguoV5TuneTicket(profile, body, now)
 	if err != nil {
 		return "", nil, err
 	}
-	header, err := hongguoV5HeaderFor(profile, query, body, uint32(now.Unix()))
+	header, err := hongguoV5HeaderFor(profile, query, body, uint32(now.Unix()), now.UnixMilli())
 	if err != nil {
 		return "", nil, err
 	}
@@ -665,9 +806,16 @@ func hongguoV5Headers(profile hongguoV5Profile, body []byte, now time.Time) (str
 
 // hongguoV5HeaderFor 在 query 已定稿的前提下算出整套头。
 //
-// 头集合照抄上游 MobilePlayback.kt：User-Agent + Accept + Content-Encoding + x-ss-stub
-// + 三元组，再补一个 Content-Type。UA 用登记时那台机的 UA，保证与 query 里的机型同源。
-func hongguoV5HeaderFor(profile hongguoV5Profile, query string, body []byte, stamp uint32) (http.Header, error) {
+// 头集合逐项对应 openhongguo v0.3.1 的 ResolvePlayback：签名头（x-khronos /
+// x-helios / x-medusa / x-ss-stub）之上再叠匿名头组 anonymousHeaders
+// （x-ss-dp / lc / x-reading-request / Cookie），然后显式覆盖成播放侧的
+// UA、Accept、x-xs-from-web、Content-Encoding。
+//
+// 其中三处是 2026-11-18 那次全线空体之后才补上的：
+//   - UA 必须是 7.4.3.32 的 Cronet 原文（hongguoV5UserAgent）；
+//   - `lc: 101` 与 `x-xs-from-web: 0` 缺任意一项都会被归到非官方客户端；
+//   - Cookie 只在登记下发了 ttreq 时才带（空票据带上去等于多一个空字段）。
+func hongguoV5HeaderFor(profile hongguoV5Profile, query string, body []byte, stamp uint32, ticketMillis int64) (http.Header, error) {
 	medusa, err := hongguoV5Medusa(profile, query, body, stamp)
 	if err != nil {
 		return nil, err
@@ -679,13 +827,20 @@ func hongguoV5HeaderFor(profile hongguoV5Profile, query string, body []byte, sta
 	bodySum := hongguoV5BodySum(body)
 	header := make(http.Header)
 	header.Set("User-Agent", profile.UserAgent)
-	header.Set("Accept", "application/json")
+	header.Set("Accept", hongguoV5Accept)
 	header.Set("Content-Type", "application/json; charset=utf-8")
 	header.Set("Content-Encoding", "gzip")
 	header.Set("X-Ss-Stub", strings.ToUpper(hex.EncodeToString(bodySum[:])))
 	header.Set("X-Khronos", strconv.FormatUint(uint64(stamp), 10))
 	header.Set("X-Helios", hongguoV5Helios(stamp, heliosRandom))
 	header.Set("X-Medusa", medusa)
+	header.Set("X-SS-DP", hongguoPlaybackAID)
+	header.Set("lc", "101")
+	header.Set("X-Xs-From-Web", "0")
+	header.Set("x-reading-request", hongguoPlaybackReadingRequest(ticketMillis))
+	if profile.State.TTReq != "" {
+		header.Set("Cookie", hongguoGuestCookie(profile.State))
+	}
 	return header, nil
 }
 
