@@ -215,10 +215,17 @@ jobs:
             echo "== $(basename "$apk")"
             output=$("$apksigner" verify --print-certs "$apk" 2>&1 || true)
             printf '%s\n' "$output"
-            if ! printf '%s' "$output" | tr -d ':' | tr '[:upper:]' '[:lower:]' | grep -q "$expected"; then
-              echo "签名证书与发布证书不一致，已终止。" >&2
-              exit 1
-            fi
+            # 不能写成 `... | grep -q "$expected"`：grep -q 命中即退出，上游 tr 收到 SIGPIPE，
+            # 在 set -o pipefail 下整条管道被判失败，于是「证书其实对得上」也会报不一致
+            # （2026-11-18 踩过：日志里 tr: write error: Broken pipe，两个 android job 全被误杀）。
+            normalized=$(printf '%s' "$output" | tr -d ':' | tr '[:upper:]' '[:lower:]')
+            case "$normalized" in
+              *"$expected"*) ;;
+              *)
+                echo "签名证书与发布证书不一致，已终止。" >&2
+                exit 1
+                ;;
+            esac
           done
       - name: Remove signing files
         if: always()
