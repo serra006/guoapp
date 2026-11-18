@@ -10,13 +10,18 @@
 """
 
 import json
+import os
 import ssl
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
-BASE = "https://bfzyapi.com/api.php/provide/vod/"
+# 接口域名会变，也会被墙。巡检时用 BOFENG_BASE 换域名对照，
+#   BOFENG_BASE=https://bfzy3.tv/api.php/provide/vod/ BOFENG_NO_PROXY=1 python tools/diag_bofeng.py
+# 默认值与 native/core/provider_bofeng.go 的 bofengAPIBaseMirrors 首项保持一致：
+# bfzyapi.com 在国内已被域名级阻断，拿它当默认等于每次都先撞一次超时。
+BASE = os.environ.get("BOFENG_BASE", "https://bfzy3.tv/api.php/provide/vod/")
 UA = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36",
 }
@@ -24,6 +29,15 @@ CTX = ssl.create_default_context()
 # 本机代理偶尔会改写证书链，巡检只关心内容是否可取，不做证书校验。
 CTX.check_hostname = False
 CTX.verify_mode = ssl.CERT_NONE
+
+# 手机上没有代理，所以「关掉代理能不能取到」才是真机口径。
+if os.environ.get("BOFENG_NO_PROXY"):
+    urllib.request.install_opener(
+        urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPSHandler(context=CTX),
+        )
+    )
 
 
 def fetch(url, timeout=15, limit=900000):

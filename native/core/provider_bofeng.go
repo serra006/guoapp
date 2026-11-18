@@ -33,7 +33,7 @@ import (
 //     （百度云 / HD国语），也可能是「整部剧」（1 条播放串里 2655 个分片≈132.7 分钟，66 集）。
 //     章节与集数必须先分类再决定，见 bofengIsEpisodeTitle / bofengWholeDrama。
 const (
-	bofengAPIBaseURL  = "https://bfzyapi.com/api.php/provide/vod/"
+	bofengAPIBaseURL  = "https://bfzy3.tv/api.php/provide/vod/"
 	bofengChannelName = "暴风资源"
 	bofengPageSize    = 20
 	// 分类上限：上游 ac=list 实测返回 49 条（6 个父类 + 43 个子类），上限必须装得下全部条目。
@@ -68,6 +68,37 @@ const (
 	// 而不是集数——短剧不存在 500 集以上。
 	bofengMaxEpisodeNumber = 500
 )
+
+// bofengAPIBaseMirrors 暴风采集接口的可用域名，按「当前实测可用」排序。
+// 2026-11-18 实测：bfzyapi.com 及其子域在国内被域名级阻断（DNS 被污染成 31.13.81.4，
+// 用真实 Cloudflare IP + 该 SNI 直连也被 RST），站点已迁到 bfzy3.tv，接口路径不变。
+// bfzyapi.com 保留在末尾：境外/代理环境仍可用，且它随时可能解封。
+//
+// 顺序即优先级：providerURLCandidates 按这个顺序展开候选，第一个能通的就被记住。
+var bofengAPIBaseMirrors = []string{
+	"https://bfzy3.tv/api.php/provide/vod/",
+	"https://www.bfzy3.tv/api.php/provide/vod/",
+	"https://bfzyapi.com/api.php/provide/vod/",
+}
+
+// bofengAPIHosts 允许被当作「暴风采集接口域名」的 host（小写、不含端口）。
+// 改动域名时这里必须和 bofengAPIBaseMirrors 一起改，否则新域名会被当成普通外链：
+// providerSourceForURL 认不出来 -> 不算本站源 -> 镜像展开失效，回到只有一个域名的老状态。
+var bofengAPIHosts = map[string]bool{
+	"bfzy3.tv":        true,
+	"www.bfzy3.tv":    true,
+	"bfzyapi.com":     true,
+	"www.bfzyapi.com": true,
+}
+
+// bofengAPIHostAllowed 判断 host 是不是暴风采集接口所在域名。
+//
+// 只有接口域名返回 true。播放/封面主机不固定（已见 bfeng10.com、c1.rrcdnbf2.com、
+// p.bfvp26.com、s3.bfllvip.com），必须返回 false：一旦它们被算成接口域名，
+// providerURLCandidates 会把媒体地址改写成接口域名，播放直接报废。
+func bofengAPIHostAllowed(host string) bool {
+	return bofengAPIHosts[strings.ToLower(strings.TrimSpace(host))]
+}
 
 func bofengNumericID(value string) bool {
 	value = strings.TrimSpace(value)

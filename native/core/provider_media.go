@@ -86,9 +86,10 @@ func providerSourceForURL(raw string) string {
 	case host == "jennyhow.com" || host == "www.jennyhow.com":
 		return sourceHanxiaoquan
 	// 只认采集接口所在的域名。播放/封面主机不固定（已见 bfeng10.com、c1.rrcdnbf2.com、
-	// p.bfvp26.com），它们不能算本站源：一旦被识别成 sourceBofeng，
+	// p.bfvp26.com、s3.bfllvip.com），它们不能算本站源：一旦被识别成 sourceBofeng，
 	// providerURLCandidates 会把媒体地址改写成接口域名，播放直接报废。
-	case host == "bfzyapi.com" || host == "www.bfzyapi.com":
+	// 允许的域名清单收在 bofengAPIHosts 里，和 bofengAPIBaseMirrors 一起维护。
+	case bofengAPIHostAllowed(host):
 		return sourceBofeng
 	default:
 		return ""

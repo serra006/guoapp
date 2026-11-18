@@ -214,7 +214,9 @@ func TestBofengCatalogParsesRowsAndPagination(t *testing.T) {
 		`{"vod_id":148397,"vod_name":"闪婚遇上裴先生2","vod_pic":"https://p.bfvp26.com/a.jpg","vod_remarks":"完结","vod_class":"闪婚离婚","type_name":"闪婚离婚","vod_score":4.0},` +
 		`{"vod_id":148398,"vod_name":"  ","vod_pic":"","vod_remarks":"更新至3集"}]}`
 	d := sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
-		if request.URL.Host != "bfzyapi.com" || !strings.HasPrefix(request.URL.Path, "/api.php/provide/vod") {
+		// 接口主域名已从被墙的 bfzyapi.com 迁到 bfzy3.tv，这里不写死域名，
+		// 只要求落在「采集接口域名」清单里——换域名不该让用例红。
+		if !bofengAPIHostAllowed(request.URL.Hostname()) || !strings.HasPrefix(request.URL.Path, "/api.php/provide/vod") {
 			t.Fatalf("unexpected bofeng request: %s", request.URL.String())
 		}
 		if values := request.URL.Query(); values.Get("ac") != "detail" || values.Get("pg") != "2" || values.Get("t") != "70" {
@@ -714,5 +716,91 @@ func TestBofengBareNumbersAbove500AreNotEpisodes(t *testing.T) {
 	route, ok := bofengPrimaryRoute(items)
 	if !ok || !strings.Contains(route.url, "/720/") {
 		t.Fatalf("primary route should be the first m3u8 one: %+v", route)
+	}
+}
+
+// 2026-11-18：bfzyapi.com 在国内被域名级阻断（DNS 污染 + SNI RST），站点迁到 bfzy3.tv。
+// 这两条测试守的是「换域名之后仍然只把采集接口域名认成本站源」这条界限。
+func TestBofengSourceForURLOnlyMatchesAPIHosts(t *testing.T) {
+	for _, raw := range []string{
+		"https://bfzy3.tv/api.php/provide/vod/?ac=list",
+		"https://www.bfzy3.tv/api.php/provide/vod/?ac=list",
+		"https://bfzyapi.com/api.php/provide/vod/?ac=list",
+		"https://www.bfzyapi.com/api.php/provide/vod/?ac=list",
+	} {
+		if source := providerSourceForURL(raw); source != sourceBofeng {
+			t.Fatalf("%s should be %q, got %q", raw, sourceBofeng, source)
+		}
+	}
+	// 播放/封面主机绝不能被认成本站源：一旦认错，providerURLCandidates 会把
+	// 媒体地址改写成接口域名，播放直接报废。
+	for _, raw := range []string{
+		"https://s3.bfllvip.com/video/x/y/index.m3u8",
+		"https://bfeng10.com/video/x/y/index.m3u8",
+		"https://c1.rrcdnbf2.com/video/x/y/index.m3u8",
+		"https://p.bfvp26.com/upload/vod/a.jpg",
+		"https://bfzy3.tv.evil.example/video/x/y/index.m3u8",
+	} {
+		if source := providerSourceForURL(raw); source != "" {
+			t.Fatalf("%s must not be recognised as a provider source, got %q", raw, source)
+		}
+	}
+}
+
+// 暴风镜像展开：首项必须是实测可用的 bfzy3.tv，bfzyapi.com 留作兜底，且没有重复。
+func TestProviderURLCandidatesExpandBofengMirrors(t *testing.T) {
+	candidates := providerURLCandidates("https://bfzy3.tv/api.php/provide/vod/?ac=list&pg=2&t=58")
+	if len(candidates) < 3 {
+		t.Fatalf("bofeng should expand to at least 3 mirrors, got %d: %v", len(candidates), candidates)
+	}
+	if !strings.Contains(candidates[0], "bfzy3.tv") {
+		t.Fatalf("the first candidate must be the working domain, got %s", candidates[0])
+	}
+	seen := map[string]bool{}
+	hasLegacyFallback := false
+	for _, candidate := range candidates {
+		if seen[candidate] {
+			t.Fatalf("duplicate candidate: %s in %v", candidate, candidates)
+		}
+		seen[candidate] = true
+		if strings.Contains(candidate, "bfzyapi.com") {
+			hasLegacyFallback = true
+		}
+		// 路径与查询串必须原样保留，否则翻页/搜索在镜像之间就失去意义。
+		if !strings.HasPrefix(candidate, "https://") || !strings.Contains(candidate, "/api.php/provide/vod/") {
+			t.Fatalf("candidate lost its api path: %s", candidate)
+		}
+		if !strings.Contains(candidate, "/api.php/provide/vod/?ac=list&pg=2&t=58") {
+			t.Fatalf("candidate lost its parameters: %s", candidate)
+		}
+	}
+	if !hasLegacyFallback {
+		t.Fatalf("bfzyapi.com must stay as an overseas fallback: %v", candidates)
+	}
+}
+
+// 老用户自愈：本地缓存/旧链接里还是被墙的 bfzyapi.com，展开后必须能拿到 bfzy3.tv。
+func TestProviderURLCandidatesHealLegacyBofengDomain(t *testing.T) {
+	candidates := providerURLCandidates("https://bfzyapi.com/api.php/provide/vod/?ac=detail&ids=148397")
+	if len(candidates) < 2 {
+		t.Fatalf("the legacy domain must expand to the new mirrors, got %v", candidates)
+	}
+	healed := false
+	for _, candidate := range candidates {
+		if strings.Contains(candidate, "bfzy3.tv") {
+			healed = true
+			break
+		}
+	}
+	if !healed {
+		t.Fatalf("old bfzyapi.com links must expand to bfzy3.tv, got %v", candidates)
+	}
+	// 新域名排在被墙的老域名前面，老链接不会先白等一次超时。
+	if !strings.Contains(candidates[0], "bfzy3.tv") {
+		t.Fatalf("bfzy3.tv must be tried before bfzyapi.com, got %v", candidates)
+	}
+	// 非本站源的地址保持原样，不能凭空造出镜像。
+	if got := providerURLCandidates("https://s3.bfllvip.com/video/x/y/index.m3u8"); len(got) != 1 || got[0] != "https://s3.bfllvip.com/video/x/y/index.m3u8" {
+		t.Fatalf("media hosts must not be rewritten: %v", got)
 	}
 }

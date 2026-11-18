@@ -132,7 +132,7 @@ func canonicalProviderSource(source string) string {
 		return sourceHanxiaoquan
 	case "qimao", "qmplaylet", "qmplaylet.com", "www.qmplaylet.com", "api-store.qmplaylet.com":
 		return sourceQimao
-	case "bofeng", "bfzyapi.com", "www.bfzyapi.com":
+	case "bofeng", "bfzy3.tv", "www.bfzy3.tv", "bfzyapi.com", "www.bfzyapi.com":
 		return sourceBofeng
 	default:
 		return strings.TrimSpace(source)
@@ -379,7 +379,7 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 	candidates := d.providerURLCandidates(rawURL)
 	var lastErr error
 	tried := 0
-	for _, candidate := range candidates {
+	for index, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
@@ -396,8 +396,12 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 					return "", ctx.Err()
 				}
 			}
+			// 多候选时把每次尝试压到 5 秒，避免一条被墙的域名把整次请求拖死；
+			// 但**第一个候选必须留满 providerTimeout**：它是当前主域名，实测首字节
+			// 1.3~1.8 秒，弱网下 5 秒会把「其实能通」的请求判成失败（暴风换域名后
+			// 主域名从 1 个候选变 3 个，这一条尤其重要）。
 			timeout := providerTimeout
-			if len(candidates) > 1 {
+			if len(candidates) > 1 && index > 0 {
 				timeout = 5 * time.Second
 			}
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, candidate, nil)
@@ -468,7 +472,16 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 
 func providerURLCandidates(rawURL string) []string {
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Hostname() != "huangguoai.com" {
+	if err != nil || u.Host == "" {
+		return []string{rawURL}
+	}
+	// 暴风采集接口：按 bofengAPIBaseMirrors 的顺序展开（顺序即优先级）。
+	// 这是老用户自愈的关键——本地缓存/旧链接里的 bfzyapi.com 会被自动换成 bfzy3.tv，
+	// 不需要用户手动清缓存或换源。
+	if bofengAPIHostAllowed(u.Hostname()) {
+		return bofengURLCandidates(u, rawURL)
+	}
+	if u.Hostname() != "huangguoai.com" {
 		return []string{rawURL}
 	}
 	out := make([]string, 0, len(huangguoAIBaseMirrors)+8)
@@ -486,6 +499,28 @@ func providerURLCandidates(rawURL string) []string {
 				add(rehostProviderURL(u, generated))
 			}
 		}
+		add(rehostProviderURL(u, mirror))
+	}
+	if len(out) == 0 {
+		return []string{rawURL}
+	}
+	return out
+}
+
+// bofengURLCandidates 把一条暴风采集接口地址展开成按优先级排序的镜像候选。
+// 只替换 scheme+host，路径与查询串（ac / pg / t / wd / ids）原样保留，
+// 否则翻页与搜索会在镜像之间失去意义。
+func bofengURLCandidates(u *url.URL, rawURL string) []string {
+	out := make([]string, 0, len(bofengAPIBaseMirrors)+1)
+	seen := map[string]bool{}
+	add := func(candidate string) {
+		if candidate == "" || seen[candidate] {
+			return
+		}
+		seen[candidate] = true
+		out = append(out, candidate)
+	}
+	for _, mirror := range bofengAPIBaseMirrors {
 		add(rehostProviderURL(u, mirror))
 	}
 	if len(out) == 0 {
