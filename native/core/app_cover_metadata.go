@@ -65,6 +65,10 @@ func (d *Downloader) nativeCoverAddress(ctx context.Context, drama nativeDrama) 
 		// 走轻量路径：只读 vod_pic，不触发整剧单流的 m3u8 探测。
 		// 列表页会批量补封面，走 fetchBofengDetail 等于每个封面多下一次 60KB 播放列表。
 		return d.fetchBofengCover(ctx, id)
+	case sourceQilin:
+		// 同理：麒麟每部剧也是一条覆盖整剧的长单流（2509~4827 个分片），
+		// 补封面绝不能顺带探测播放列表。
+		return d.fetchQilinCover(ctx, id)
 	case sourceCloudFront:
 		if !rankingSourceID.MatchString(id) {
 			return "", errors.New("无效的黄果剧集 ID")

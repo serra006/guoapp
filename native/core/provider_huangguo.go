@@ -33,6 +33,7 @@ const (
 	sourceHanxiaoquan   = "hanxiaoquan"
 	sourceQimao         = "qimao"
 	sourceBofeng        = "bofeng"
+	sourceQilin         = "qilin"
 
 	providerMaxBodyBytes = 20 * 1024 * 1024
 	providerTimeout      = 12 * time.Second
@@ -99,7 +100,7 @@ func splitProviderDramaID(id string) (source, sourceID string, ok bool) {
 
 func isHuangguoProviderSource(source string) bool {
 	switch canonicalProviderSource(source) {
-	case sourceHuangguoAI, sourceHuangguoVideo, sourceHuangdou, sourceHongguo, sourceHuangju, sourceYeguo, sourceDSD, sourceCloudFront, sourceSorani, sourceGuipian, sourceHanxiaoquan, sourceQimao, sourceBofeng:
+	case sourceHuangguoAI, sourceHuangguoVideo, sourceHuangdou, sourceHongguo, sourceHuangju, sourceYeguo, sourceDSD, sourceCloudFront, sourceSorani, sourceGuipian, sourceHanxiaoquan, sourceQimao, sourceBofeng, sourceQilin:
 		return true
 	default:
 		return false
@@ -134,6 +135,8 @@ func canonicalProviderSource(source string) string {
 		return sourceQimao
 	case "bofeng", "bfzy3.tv", "www.bfzy3.tv", "bfzyapi.com", "www.bfzyapi.com":
 		return sourceBofeng
+	case "qilin", "qlys.cc", "www.qlys.cc":
+		return sourceQilin
 	default:
 		return strings.TrimSpace(source)
 	}
@@ -257,6 +260,9 @@ func (d *Downloader) GetHuangguoChapters(ctx context.Context, source, sourceID s
 		return drama.DisplayTitle(), chapters, err
 	case sourceBofeng:
 		drama, chapters, err := d.fetchBofengDetail(ctx, sourceID)
+		return drama.DisplayTitle(), chapters, err
+	case sourceQilin:
+		drama, chapters, err := d.fetchQilinDetail(ctx, sourceID)
 		return drama.DisplayTitle(), chapters, err
 	case sourceCloudFront:
 		return d.fetchLegacyChapters(ctx, sourceID)
@@ -475,11 +481,11 @@ func providerURLCandidates(rawURL string) []string {
 	if err != nil || u.Host == "" {
 		return []string{rawURL}
 	}
-	// 暴风采集接口：按 bofengAPIBaseMirrors 的顺序展开（顺序即优先级）。
-	// 这是老用户自愈的关键——本地缓存/旧链接里的 bfzyapi.com 会被自动换成 bfzy3.tv，
+	// 苹果 CMS 采集接口站源（暴风 / 麒麟）：按各站 mirrors 的顺序展开（顺序即优先级）。
+	// 这是老用户自愈的关键——本地缓存/旧链接里的旧域名会被自动换成当前可用域名，
 	// 不需要用户手动清缓存或换源。
-	if bofengAPIHostAllowed(u.Hostname()) {
-		return bofengURLCandidates(u, rawURL)
+	if site := maccmsSiteForHost(u.Hostname()); site != nil {
+		return maccmsURLCandidates(site, u, rawURL)
 	}
 	if u.Hostname() != "huangguoai.com" {
 		return []string{rawURL}
@@ -509,24 +515,9 @@ func providerURLCandidates(rawURL string) []string {
 
 // bofengURLCandidates 把一条暴风采集接口地址展开成按优先级排序的镜像候选。
 // 只替换 scheme+host，路径与查询串（ac / pg / t / wd / ids）原样保留，
-// 否则翻页与搜索会在镜像之间失去意义。
+// 否则翻页与搜索会在镜像之间失去意义。实现在 maccmsURLCandidates。
 func bofengURLCandidates(u *url.URL, rawURL string) []string {
-	out := make([]string, 0, len(bofengAPIBaseMirrors)+1)
-	seen := map[string]bool{}
-	add := func(candidate string) {
-		if candidate == "" || seen[candidate] {
-			return
-		}
-		seen[candidate] = true
-		out = append(out, candidate)
-	}
-	for _, mirror := range bofengAPIBaseMirrors {
-		add(rehostProviderURL(u, mirror))
-	}
-	if len(out) == 0 {
-		return []string{rawURL}
-	}
-	return out
+	return maccmsURLCandidates(bofengSite, u, rawURL)
 }
 
 func rehostProviderURL(u *url.URL, mirror string) string {

@@ -367,9 +367,17 @@ func hongguoV5BranchOf(query string, body []byte, stamp uint32) uint32 {
 // `_rticket` 槽位再逐个 offset 覆写，只有完全找不到时才追加到末尾。
 // 返回的这一串既是签名输入，也是最终发出去的 query——调用方不许再编码一次。
 func hongguoV5TuneTicket(profile hongguoV5Profile, body []byte, now time.Time) (string, error) {
+	return hongguoV5TunePairs(profile.pairs(), body, now)
+}
+
+// hongguoV5TunePairs 是 hongguoV5TuneTicket 的形态无关版本：给定任意一组有序 pair
+// （旧 29 项、新 13 项都行），扫出一个能让 branch 命中的 `_rticket`。
+//
+// `_rticket` 槽位按**名字**定位，所以两套 query 的第 4 位 / 第 13 位差异不用特判；
+// 槽位不存在时追加到末尾（与上游 Sign() 的行为一致）。
+func hongguoV5TunePairs(pairs [][2]string, body []byte, now time.Time) (string, error) {
 	stamp := uint32(now.Unix())
 	base := now.UnixMilli()
-	pairs := profile.pairs()
 	slot := -1
 	for index := range pairs {
 		if pairs[index][0] == "_rticket" {
@@ -846,4 +854,177 @@ func hongguoV5HeaderFor(profile hongguoV5Profile, query string, body []byte, sta
 
 func hongguoV5BodySum(body []byte) [16]byte {
 	return md5.Sum(body)
+}
+
+// ============================================================================
+// 7.4.5.32 形态（v1）：13 项 query、不带 `player` 段的入口。
+// ============================================================================
+//
+// 2026-11-20 官方把取流的门禁切到了 7.4.5.32 客户端的请求形态，入口从
+//
+//	POST /novel/player/multi_video_model/player/v1   （29 项 query，2026-11-16 起的那套）
+//
+// 换成
+//
+//	POST /novel/player/multi_video_model/v1          （13 项 query，末尾无斜杠）
+//
+// 同一个 path 在 2026-11-16 之前就存在过，那时配的是「键 1」的 payload 与不签名的
+// 发送方式；现在它配的是「键 1004」的 payload + 完整的 v5 三元组签名。
+// 也就是说：**path 是老的，形态是新的**，两者必须成套使用。
+//
+// 三处与旧形态的硬差异，改任何一处都只会拿到 200 + 0 字节：
+//   - query 只有 13 项（旧形态 29 项），且 `_rticket` 落在**最后一位**而不是第 4 位；
+//   - UA 是 **73932** 的老 UA，**不跟着** query 里的 74532 走（这是官方客户端的
+//     真实状态：装的是 7.4.5.32，但 TTNet 的 UA 尾巴还停在 7.3.9.32）；
+//   - `Accept` 只有 `application/json`，没有旧形态那个 `,application/x-protobuf`；
+//     并且**不带** Cookie / lc / x-reading-request / x-xs-from-web
+//     （上游实现用 CookieJar.NO_COOKIES，带上去反而多出四个不该有的字段）。
+//
+// 签名材料一个字节都没变：signKey / sbox / magic / license 646637794 / 分支号 12
+// 全部沿用。7.4.5.32 与 7.4.3.32 的 metasec 材料逐字节相同，换版本号不需要换材料。
+//
+// 算法来源：tsukiyo-zero/hongguoTV commit 573d75a 的
+// kotlin-tv/core/src/main/kotlin/com/hongguotv/core/MobilePlayback.kt（11-20 修好）。
+const (
+	// hongguoV5V1Path 是 7.4.5.32 形态的入口。**末尾没有斜杠**，与旧入口不同。
+	hongguoV5V1Path = "/novel/player/multi_video_model/v1"
+
+	// 版本三件套：query 的 version_code / version_name / update_version_code。
+	hongguoV5V1VersionCode = "74532"
+	hongguoV5V1VersionName = "7.4.5.32"
+	// 渠道串带 aid 后缀，与旧形态的 xiaomi_8662_64 同构。
+	hongguoV5V1Channel = "vivo_8662_64"
+
+	// 设备档案：vivo PGT-AN10（P60 的渠道商机型串），Android 12。
+	hongguoV5V1DeviceModel  = "PGT-AN10"
+	hongguoV5V1DeviceBrand  = "vivo"
+	hongguoV5V1OSVersion    = "12"
+	hongguoV5V1OSAPI        = "31"
+	hongguoV5V1Resolution   = "1260*2800"
+	hongguoV5V1DPI          = "480"
+	hongguoV5V1Build        = "V417IR"
+
+	// hongguoV5V1Accept 只有这一个 MIME，没有 protobuf 后缀。
+	hongguoV5V1Accept = "application/json"
+)
+
+// hongguoV5V1UserAgent 是 7.4.5.32 客户端的 UA **原文**。
+//
+// 版本号是 **73932**，不能跟着 query 的 74532 改：官方客户端装的是 7.4.5.32，
+// 但内嵌 TTNet 的 UA 尾巴停在 7.3.9.32。把两处改成一致会造出一个线上不存在的
+// 指纹，服务端回 200 + 0 字节。这一条与旧形态（UA 版本号必须等于 query 版本号）
+// 的规则**正好相反**，是最容易改错的地方。
+const hongguoV5V1UserAgent = "com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)"
+
+// hongguoV5V1Pairs 按官方客户端实际发送的顺序给出 13 项 query。
+//
+// 两处不能动：
+//   - **顺序**参与 SM3 摘要，所以不能用 url.Values 的字母序；
+//   - `_rticket` 必须在**最后一位**（0 基索引 12），值由 hongguoV5TunePairs 就地填入。
+//
+// 这 13 项里没有 device_brand / os_api / resolution / dpi / host_abi / ac / ssmix /
+// manifest_version_code / pv_player / compliance_status 等等——旧形态那 29 项里
+// 有一大半在这个形态下根本不上报，补上去等于换了一个请求。
+func hongguoV5V1Pairs(profile hongguoV5Profile) [][2]string {
+	return [][2]string{
+		{"aid", hongguoPlaybackAID},
+		{"app_name", "novelread"},
+		{"version_code", profile.VersionCode},
+		{"version_name", profile.VersionName},
+		{"channel", profile.Channel},
+		{"device_platform", "android"},
+		{"device_type", profile.Model},
+		{"os_version", profile.OSVersion},
+		{"update_version_code", profile.VersionCode},
+		{"iid", profile.InstallID},
+		{"cdid", profile.CDID},
+		{"device_id", profile.DeviceID},
+		{"_rticket", ""},
+	}
+}
+
+// hongguoV5V1DeviceFromState 还原 7.4.5.32 形态的设备描述。
+//
+// DeviceID / InstallID / CDID 取自身份状态（每次登记独有），其余全部取 v1 常量集：
+// 这套档案与登记时随机选的机型**不一致**是正常的——登记走的是 7.3.5.32 的身份链路，
+// 取流走的是 7.4.5.32 的播放链路，两边本来就是两台"不同的客户端"。
+func hongguoV5V1DeviceFromState(state hongguoIdentityState) hongguoV5Profile {
+	return hongguoV5Profile{
+		DeviceID:    state.DeviceID,
+		InstallID:   state.InstallID,
+		CDID:        state.CDID,
+		VersionCode: hongguoV5V1VersionCode,
+		VersionName: hongguoV5V1VersionName,
+		Channel:     hongguoV5V1Channel,
+		Model:       hongguoV5V1DeviceModel,
+		Brand:       hongguoV5V1DeviceBrand,
+		OSVersion:   hongguoV5V1OSVersion,
+		OSAPI:       hongguoV5V1OSAPI,
+		Resolution:  hongguoV5V1Resolution,
+		DPI:         hongguoV5V1DPI,
+		Build:       hongguoV5V1Build,
+		UserAgent:   hongguoV5V1UserAgent,
+		State:       state,
+	}
+}
+
+// hongguoV5V1Payload 是 7.4.5.32 形态的请求体（未压缩）。
+//
+// 与旧形态只差一项：**没有 `dr_scene`**。多带一个字段就是另一个请求。
+// 键仍是 "1004"（短剧档位），video_platform 仍是 1024，device_level 仍是 1。
+func hongguoV5V1Payload(videoID string) map[string]any {
+	return map[string]any{
+		"biz_param": map[string]any{
+			"detail_page_version": 0, "device_level": 1, "disable_digg_stat": false,
+			"disable_video_relate_book": false, "need_all_video_definition": true,
+			"need_mp4_align": false, "use_os_player": false, "use_server_dns": false,
+			"video_platform": 1024,
+		},
+		"mixed_video_id_map": map[string]any{"1004": []string{videoID}},
+	}
+}
+
+// hongguoV5V1Headers 一次性把 7.4.5.32 形态的 query 与头算齐。
+// 返回的 query 就是最终必须原样发出去的那一串，调用方不允许再改。
+func hongguoV5V1Headers(profile hongguoV5Profile, body []byte, now time.Time) (string, http.Header, error) {
+	query, err := hongguoV5TunePairs(hongguoV5V1Pairs(profile), body, now)
+	if err != nil {
+		return "", nil, err
+	}
+	header, err := hongguoV5V1HeaderFor(profile, query, body, uint32(now.Unix()))
+	if err != nil {
+		return "", nil, err
+	}
+	return query, header, nil
+}
+
+// hongguoV5V1HeaderFor 在 query 已定稿的前提下算出整套头。
+//
+// 只发 8 个头：4 个载体头（UA / Accept / Content-Type / Content-Encoding）
+// + x-ss-stub（gzip 后 body 的 MD5）
+// + 三个签名头（x-khronos / x-helios / x-medusa）。
+//
+// 刻意**不发** Cookie / lc / x-reading-request / x-xs-from-web：上游实现是
+// CookieJar.NO_COOKIES，这四个头属于旧形态（player/v1）的客户端画像，
+// 混进新形态等于同时冒充两代客户端。
+func hongguoV5V1HeaderFor(profile hongguoV5Profile, query string, body []byte, stamp uint32) (http.Header, error) {
+	medusa, err := hongguoV5Medusa(profile, query, body, stamp)
+	if err != nil {
+		return nil, err
+	}
+	heliosRandom, err := hongguoV5Random()
+	if err != nil {
+		return nil, err
+	}
+	bodySum := md5.Sum(body)
+	header := make(http.Header)
+	header.Set("User-Agent", profile.UserAgent)
+	header.Set("Accept", hongguoV5V1Accept)
+	header.Set("Content-Type", "application/json; charset=utf-8")
+	header.Set("Content-Encoding", "gzip")
+	header.Set("X-Ss-Stub", strings.ToUpper(hex.EncodeToString(bodySum[:])))
+	header.Set("X-Khronos", strconv.FormatUint(uint64(stamp), 10))
+	header.Set("X-Helios", hongguoV5Helios(stamp, heliosRandom))
+	header.Set("X-Medusa", medusa)
+	return header, nil
 }

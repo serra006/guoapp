@@ -49,6 +49,8 @@ func (d *Downloader) providerBaseURL(source string) string {
 		fallback = qimaoSiteBaseURL
 	case sourceBofeng:
 		fallback = bofengAPIBaseURL
+	case sourceQilin:
+		fallback = qilinAPIBaseURL
 	default:
 		fallback = "https://d2pypzndaqisk.cloudfront.net"
 	}
@@ -91,6 +93,8 @@ func providerSourceForURL(raw string) string {
 	// 允许的域名清单收在 bofengAPIHosts 里，和 bofengAPIBaseMirrors 一起维护。
 	case bofengAPIHostAllowed(host):
 		return sourceBofeng
+	case qilinAPIHostAllowed(host):
+		return sourceQilin
 	default:
 		return ""
 	}
@@ -157,6 +161,9 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 	}
 	if chapter.Source == sourceBofeng {
 		return d.resolveBofengMedia(ctx, task)
+	}
+	if chapter.Source == sourceQilin {
+		return d.resolveQilinMedia(ctx, task)
 	}
 	if strings.HasPrefix(chapter.VideoURL, "hongguo-cenc://") {
 		return d.resolveHongguoMedia(ctx, task)

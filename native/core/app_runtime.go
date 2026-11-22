@@ -600,8 +600,15 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		// 挂了 warning 会走 catalog_browser 的 AppFailure 分支，界面变成「暂时无法加载」。
 		return result, nil
 	}
-	if query != "" && source == sourceBofeng {
-		items, more, err := d.fetchBofengCatalogPage(ctx, page, "", query)
+	if query != "" && (source == sourceBofeng || source == sourceQilin) {
+		var items []Drama
+		var more bool
+		var err error
+		if source == sourceBofeng {
+			items, more, err = d.fetchBofengCatalogPage(ctx, page, "", query)
+		} else {
+			items, more, err = d.fetchQilinCatalogPage(ctx, page, "", query)
+		}
 		if err != nil {
 			return result, err
 		}
@@ -609,7 +616,7 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 			result.Items = append(result.Items, nativeNormalize(drama))
 		}
 		result.HasMore = more
-		// 与七猫同理：暴风资源搜不到时是正常空结果，挂 warning 会被界面当成加载失败。
+		// 与七猫同理：苹果 CMS 站源搜不到时是正常空结果，挂 warning 会被界面当成加载失败。
 		return result, nil
 	}
 	if query != "" && (source == sourceYeguo || source == sourceDSD) {
@@ -712,6 +719,8 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		items, result.HasMore, err = d.fetchQimaoCatalogPage(ctx, page, category, "")
 	case sourceBofeng:
 		items, result.HasMore, err = d.fetchBofengCatalogPage(ctx, page, category, "")
+	case sourceQilin:
+		items, result.HasMore, err = d.fetchQilinCatalogPage(ctx, page, category, "")
 	case sourceHuangguoVideo:
 		address := fmt.Sprintf("%s/videos?page=%d", d.providerBaseURL(source), page)
 		if category != "" {
@@ -729,7 +738,7 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 	if err != nil && len(items) == 0 {
 		return result, err
 	}
-	if len(items) == 0 && page == 1 && source != sourceHuangju && source != sourceYeguo && source != sourceDSD && source != sourceSorani && source != sourceGuipian && source != sourceHanxiaoquan && source != sourceQimao && source != sourceBofeng {
+	if len(items) == 0 && page == 1 && source != sourceHuangju && source != sourceYeguo && source != sourceDSD && source != sourceSorani && source != sourceGuipian && source != sourceHanxiaoquan && source != sourceQimao && source != sourceBofeng && source != sourceQilin {
 		return result, errors.New("站源暂未返回剧集，请稍后刷新")
 	}
 	if err != nil {
@@ -779,6 +788,8 @@ func (engine *nativeEngine) nativeDetail(ctx context.Context, drama nativeDrama)
 		raw, chapters, err = engine.downloader.fetchQimaoDetail(ctx, sourceID)
 	case sourceBofeng:
 		raw, chapters, err = engine.downloader.fetchBofengDetail(ctx, sourceID)
+	case sourceQilin:
+		raw, chapters, err = engine.downloader.fetchQilinDetail(ctx, sourceID)
 	default:
 		title, chapters, err = engine.downloader.GetHuangguoChapters(ctx, source, sourceID)
 	}

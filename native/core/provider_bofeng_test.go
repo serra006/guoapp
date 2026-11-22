@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -802,5 +803,39 @@ func TestProviderURLCandidatesHealLegacyBofengDomain(t *testing.T) {
 	// 非本站源的地址保持原样，不能凭空造出镜像。
 	if got := providerURLCandidates("https://s3.bfllvip.com/video/x/y/index.m3u8"); len(got) != 1 || got[0] != "https://s3.bfllvip.com/video/x/y/index.m3u8" {
 		t.Fatalf("media hosts must not be rewritten: %v", got)
+	}
+}
+
+// 镜像表一致性守卫（与 TestQilinMirrorsStayUsableAfterDomainRotation 同一道防线）。
+//
+// 上面那条 TestProviderURLCandidatesExpandBofengMirrors 覆盖的是「展开顺序正确、参数不丢」，
+// 但它**不校验镜像 host 是否登记在 bofengAPIHosts 里**——而那正是会让镜像展开静默失效的
+// 错误：换了域名却忘了同步 hosts，providerSourceForURL 认不出新域名，providerURLCandidates
+// 直接 return []string{rawURL}，镜像表变成摆设，用户端直到读不到目录才暴露。
+//
+// 注意方向：bofengAPIHosts 允许比镜像表**多**。www.bfzyapi.com 只为老链接自愈而存在，
+// 故意不排进候选（避免每次请求都先撞一次已知被墙的域名白等 5 秒），
+// 所以这里只做「镜像 ⊂ hosts」单向校验，不做反向。
+func TestBofengMirrorsStayConsistentWithHosts(t *testing.T) {
+	if len(bofengAPIBaseMirrors) < 2 {
+		t.Fatalf("暴风至少要两条镜像，否则域名被封就无路可退；当前只有 %d 条：%v",
+			len(bofengAPIBaseMirrors), bofengAPIBaseMirrors)
+	}
+	if bofengAPIBaseMirrors[0] != bofengAPIBaseURL {
+		t.Fatalf("镜像表首位必须是主域名 %s（顺序即优先级），实际是 %s",
+			bofengAPIBaseURL, bofengAPIBaseMirrors[0])
+	}
+	for _, mirror := range bofengAPIBaseMirrors {
+		parsed, err := url.Parse(mirror)
+		if err != nil || parsed.Host == "" {
+			t.Fatalf("镜像 %q 不是合法的绝对地址", mirror)
+		}
+		if !strings.HasSuffix(mirror, "/api.php/provide/vod/") {
+			t.Fatalf("镜像 %q 丢了采集接口路径 /api.php/provide/vod/", mirror)
+		}
+		if !bofengAPIHostAllowed(parsed.Hostname()) {
+			t.Fatalf("镜像 host %q 没登记进 bofengAPIHosts：改了镜像表必须同步 hosts，"+
+				"否则 providerSourceForURL 认不出新域名，镜像展开静默失效", parsed.Hostname())
+		}
 	}
 }

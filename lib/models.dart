@@ -16,7 +16,8 @@ class SourceSite {
       id == 'guipian' ||
       id == 'hanxiaoquan' ||
       id == 'qimao' ||
-      id == 'bofeng';
+      id == 'bofeng' ||
+      id == 'qilin';
   /// 搜索联想：电视遥控器只能打拼音，中文剧名必须靠联想下拉转出来。
   /// 联想词库来自红果的联想接口（拼音检索，返回的是通用短剧词/剧名，
   /// 与当前站源无关），所以在线搜索的站源都该开——不开就等于没有输入入口。
@@ -44,11 +45,13 @@ class SourceSite {
   );
   static const qimao = SourceSite('qimao', '七猫', '短剧 · 分类 · 搜索');
   static const bofeng = SourceSite('bofeng', '暴风', '短剧 · 分类 · 搜索');
+  static const qilin = SourceSite('qilin', '麒麟', '短剧 · 分类 · 搜索');
 
-  /// 默认可见的站源：七猫、暴风、红果、韩小圈、鬼片网、青空次元。
+  /// 默认可见的站源：七猫、暴风、麒麟、红果、韩小圈、鬼片网、青空次元。
   static const primaryValues = [
     qimao,
     bofeng,
+    qilin,
     hongguo,
     hanxiaoquan,
     guipian,
@@ -70,7 +73,7 @@ class SourceSite {
     SourceSite('huangguoai', '黄果 AI', 'AI 短剧'),
     SourceSite('cloudfront', '黄果旧版', '旧 API 剧库'),
   ];
-  /// 可选站源只剩 6 个 primary，与 README 对外口径「内置 6 个站源」一致。
+  /// 可选站源只剩 7 个 primary，与 README 对外口径「内置 7 个站源」一致。
   static const knownValues = [...primaryValues];
   /// byId / isKnown 仍然认识历史 id，保证旧数据能正常显示、不被判非法。
   static const allValues = [...primaryValues, ...legacyValues];

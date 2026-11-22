@@ -14,16 +14,36 @@ import (
 	"time"
 )
 
-// hongguoV5PlaybackRequest 走现行 v5 入口取一集的播放信息。
+// hongguoV5PlaybackRequest 走**旧形态**（29 项 query、`player/v1`、7.4.3.32）。
+//
+// 2026-11-22 起这条入口已被站方置空（实测：连 GET 与完全不签名的请求都回同一个
+// 200 + 0 字节），保留它只为「形态再变回来时自动接上」。
+func (downloader *Downloader) hongguoV5PlaybackRequest(ctx context.Context, state hongguoIdentityState, videoID string) (map[string]any, error) {
+	return downloader.hongguoV5Post(ctx, hongguoV5Path, hongguoV5Payload(videoID),
+		hongguoV5DeviceFromState(state), hongguoV5Headers)
+}
+
+// hongguoV5V1Request 走**7.4.5.32 形态**（13 项 query、`multi_video_model/v1`）。
+// 这是 2026-11-20 起官方客户端实际在用的取流形态。
+func (downloader *Downloader) hongguoV5V1Request(ctx context.Context, state hongguoIdentityState, videoID string) (map[string]any, error) {
+	return downloader.hongguoV5Post(ctx, hongguoV5V1Path, hongguoV5V1Payload(videoID),
+		hongguoV5V1DeviceFromState(state), hongguoV5V1Headers)
+}
+
+// hongguoV5Signer 是「给定 profile 与 gzip 体，算出 query 与整套头」的签名函数。
+// 两套形态只在这一步分叉，其余（压缩、发送、状态码、空体、业务码）完全共用，
+// 免得两份实现慢慢漂移出差异。
+type hongguoV5Signer func(profile hongguoV5Profile, body []byte, now time.Time) (string, http.Header, error)
+
+// hongguoV5Post 是两套形态共用的发送与解析。
 //
 // 与旧入口的三点硬差异（改任何一点都只会拿到 200 + 0 字节）：
 //   - body 必须是 gzip 之后的字节，签名与 x-ss-stub 都基于压缩后的内容；
-//   - 头只留 Content-Type / Content-Encoding / x-ss-stub 与三元组，
-//     多带 User-Agent、Accept 会被判成非官方客户端；
-//   - query 是 29 项、顺序固定，`_rticket` 落在第 4 槽，ts/_rticket 参与签名，
-//     签完不能改（签名串与发送串必须是同一份字节）。
-func (downloader *Downloader) hongguoV5PlaybackRequest(ctx context.Context, state hongguoIdentityState, videoID string) (map[string]any, error) {
-	raw, err := json.Marshal(hongguoV5Payload(videoID))
+//   - query 由签名函数产出，`_rticket` 参与签名，签完不能改；
+//   - 状态码 200 但 0 字节一律归为 errHongguoAppEmpty（站方的软拒绝形态）。
+func (downloader *Downloader) hongguoV5Post(ctx context.Context, path string, payload map[string]any,
+	profile hongguoV5Profile, sign hongguoV5Signer) (map[string]any, error) {
+	raw, err := json.Marshal(payload)
 	if err != nil {
 		return nil, errors.New("无法准备红果取流请求")
 	}
@@ -31,13 +51,12 @@ func (downloader *Downloader) hongguoV5PlaybackRequest(ctx context.Context, stat
 	if err != nil {
 		return nil, errors.New("无法压缩红果取流请求")
 	}
-	profile := hongguoV5DeviceFromState(state)
-	query, header, err := hongguoV5Headers(profile, body, time.Now())
+	query, header, err := sign(profile, body, time.Now())
 	if err != nil {
 		return nil, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		hongguoPlaybackBaseURL+hongguoV5Path+"?"+query, bytes.NewReader(body))
+		hongguoPlaybackBaseURL+path+"?"+query, bytes.NewReader(body))
 	if err != nil {
 		return nil, errors.New("无法准备红果取流请求")
 	}
@@ -104,6 +123,25 @@ func hongguoAppMediaFromAny(result map[string]any, videoID string) (providerMedi
 	return providerMedia{}, lastErr
 }
 
+// hongguoAppMediaFromV1 解析 7.4.5.32 形态（13 项 query）的响应。
+//
+// 标准形态是 data["1004"][vid].video_model —— 键 1004 是短剧档位（与请求体里
+// mixed_video_id_map 的键对应）。取不到再退回 hongguoAppMediaFromAny 的三形态兼容
+// 分支（只认本次请求的 vid，绝不退回「data 里唯一那一项」）。
+func hongguoAppMediaFromV1(result map[string]any, videoID string) (providerMedia, error) {
+	if tier, ok := nestedMap(result, "data")["1004"].(map[string]any); ok {
+		if entry, ok := tier[videoID].(map[string]any); ok && len(entry) > 0 {
+			wrapped := map[string]any{"data": map[string]any{videoID: entry}}
+			if media, err := hongguoAppMediaFromBatch(wrapped, videoID); err == nil {
+				return media, nil
+			} else if !errors.Is(err, errHongguoAppNoMedia) {
+				return providerMedia{}, err
+			}
+		}
+	}
+	return hongguoAppMediaFromAny(result, videoID)
+}
+
 // v5 空响应的语义（2026-11-16 上游定论，见 N3urda/hongguoTV IDENTITY_RECOVERY.md）：
 // HTTP 200 + 0 字节**不是**「签错了」，也不是限流，而是**当前持久化的取流身份被判为
 // 不可用**。上游的修法是把这个身份换掉一次、用新登记的身份重试同一集；实测我们这边
@@ -118,17 +156,15 @@ const (
 )
 
 // 两个只影响「换号策略」的可调项，默认值就是正式逻辑：
-//   - hongguoV5RotateAttempts：一次取流最多用几个身份。正式值 2 = 空响应时换一个号再试。
-//     站方发的号里约有一半是坏号，且坏了就是整号失效（同一号连问三次全空、
-//     好号连问三次全通）。排查期会临时调到 3 来区分「签名不对」与「撞上坏号」。
-//   - hongguoV5RotateBypass：跳过 30 秒冷却闸门。**只给排查用**，正式逻辑必须
-//     让冷却生效，否则用户连点播放会打出一串陌生人登记。
+//   - hongguoV5RotateAttempts：一次取流最多用几个身份。正式值 1 = **不换号**。
+//     2026-11-22 已实测证明「200 + 0 字节」与身份无关（完全不签名的请求、空
+//     device_id/iid 的请求拿到的是同一个响应），所以「空响应说明这个号坏了、
+//     换一个号再试」这个前提不成立。继续换号只会每次播放失败都白烧一条设备登记，
+//     有把整机登记配额打到被站方封禁的风险。**不要改回 2 以上。**
+//   - hongguoV5RotateBypass：跳过 30 秒冷却闸门。**只给排查用**。
 var (
-	// 2 = 空响应时换一个新登记的身份再试一次。站方发的号约有一半是坏号，
-	// 且坏号是号级、永久、响应上看不出来的（同一号连问三次全空，好号连问三次全通），
-	// 所以只发一次会有约一半的假失败面；换一次号把失败面压到约 1/4。
-	// 不要调到 3 以上：注册有配额（约 30 个后要退避 10 分钟），用户连点播放会打爆发号。
-	hongguoV5RotateAttempts = 2
+	// 1 = 不换号。见上面的说明。
+	hongguoV5RotateAttempts = 1
 	hongguoV5RotateBypass   = false
 )
 
@@ -181,8 +217,23 @@ func (downloader *Downloader) hongguoV5Attempt(ctx context.Context, state honggu
 }
 
 func (downloader *Downloader) hongguoV5Once(ctx context.Context, state hongguoIdentityState, videoID string) (providerMedia, error) {
+	// 首选 7.4.5.32 形态（13 项 query、入口不带 player 段）——2026-11-20 起官方在用。
+	// 解析口径按上游来：先取 data["1004"][vid]["video_model"]，取不到再走兼容分支。
+	v1Result, v1Err := downloader.hongguoV5V1Request(ctx, state, videoID)
+	if v1Err == nil {
+		if media, err := hongguoAppMediaFromV1(v1Result, videoID); err == nil {
+			return media, nil
+		} else if !errors.Is(err, errHongguoAppNoMedia) {
+			return providerMedia{}, err
+		}
+	}
+	// 回退旧形态（29 项 query、player/v1、7.4.3.32）。
+	// 它自 2026-11-22 起被站方置空，留着是为了形态再变回来时能自动接上。
 	result, err := downloader.hongguoV5PlaybackRequest(ctx, state, videoID)
 	if err != nil {
+		if v1Err != nil {
+			return providerMedia{}, v1Err
+		}
 		return providerMedia{}, err
 	}
 	return hongguoAppMediaFromAny(result, videoID)
