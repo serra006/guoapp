@@ -14,17 +14,26 @@ import (
 	"time"
 )
 
-// hongguoV5PlaybackRequest 走**旧形态**（29 项 query、`player/v1`、7.4.3.32）。
+// hongguoV5PlaybackRequest 走 29 项 query + `player/v1` + 7.4.3.32 档案。
 //
-// 2026-11-22 起这条入口已被站方置空（实测：连 GET 与完全不签名的请求都回同一个
-// 200 + 0 字节），保留它只为「形态再变回来时自动接上」。
+// 这是现行唯一可用的取流入口。2026-11-22 的「全线 200 + 0 字节」曾被误判为
+// 「站方把这条入口置空」，实际根因是 Medusa 的 message field 21 用了 377
+// （见 hongguoV5MessageField21）。改回 312 之后同一条入口原样恢复：
+// 30 秒内取到 1080P、10 档变体、CENC 密钥齐全，HEVC 1080×1920 / 103.4s。
 func (downloader *Downloader) hongguoV5PlaybackRequest(ctx context.Context, state hongguoIdentityState, videoID string) (map[string]any, error) {
 	return downloader.hongguoV5Post(ctx, hongguoV5Path, hongguoV5Payload(videoID),
 		hongguoV5DeviceFromState(state), hongguoV5Headers)
 }
 
 // hongguoV5V1Request 走**7.4.5.32 形态**（13 项 query、`multi_video_model/v1`）。
-// 这是 2026-11-20 起官方客户端实际在用的取流形态。
+//
+// 【已废弃 · 不要接回主链路】
+// 2026-11-24 03:37 实测：在 Medusa field 21 = 312（即签名完全正确）的前提下，
+// 13 项 query 这套**依然返回 HTTP 200 + 0 字节**；同一时刻、同一身份换成 29 项
+// query 立刻拿到 24.2KB 的 video_model。也就是说 13 项形态在这条路径上是死路，
+// 与 field 21 无关。
+//
+// 留着只为两点：一是下次形态再变时能直接对照，二是让「别再试一次」这件事有据可查。
 func (downloader *Downloader) hongguoV5V1Request(ctx context.Context, state hongguoIdentityState, videoID string) (map[string]any, error) {
 	return downloader.hongguoV5Post(ctx, hongguoV5V1Path, hongguoV5V1Payload(videoID),
 		hongguoV5V1DeviceFromState(state), hongguoV5V1Headers)
@@ -217,23 +226,18 @@ func (downloader *Downloader) hongguoV5Attempt(ctx context.Context, state honggu
 }
 
 func (downloader *Downloader) hongguoV5Once(ctx context.Context, state hongguoIdentityState, videoID string) (providerMedia, error) {
-	// 首选 7.4.5.32 形态（13 项 query、入口不带 player 段）——2026-11-20 起官方在用。
-	// 解析口径按上游来：先取 data["1004"][vid]["video_model"]，取不到再走兼容分支。
-	v1Result, v1Err := downloader.hongguoV5V1Request(ctx, state, videoID)
-	if v1Err == nil {
-		if media, err := hongguoAppMediaFromV1(v1Result, videoID); err == nil {
-			return media, nil
-		} else if !errors.Is(err, errHongguoAppNoMedia) {
-			return providerMedia{}, err
-		}
-	}
-	// 回退旧形态（29 项 query、player/v1、7.4.3.32）。
-	// 它自 2026-11-22 起被站方置空，留着是为了形态再变回来时能自动接上。
+	// 只走一个形态：29 项 query + player/v1（7.4.3.32）。
+	//
+	// 2026-11-22 那次「全线 200 + 0」的真正原因不在请求形态，而在 Medusa 的
+	// message field 21（见 hongguoV5MessageField21）。修好那个字段之后，实测
+	// player/v1、multi/v1、preload/v1 三个 path 全都能出 1080P，所以**不需要**
+	// 多形态轮询；而反过来，13 项 query 那套（hongguoV5V1Request）即使在 field 21
+	// 正确的前提下依然是 200 + 0 字节，是条死路，已从主链路移除。
+	//
+	// 保留单一形态还有一个好处：失败时只消耗一次请求，不会因为「先试坏的形态」
+	// 把站方风控打热。
 	result, err := downloader.hongguoV5PlaybackRequest(ctx, state, videoID)
 	if err != nil {
-		if v1Err != nil {
-			return providerMedia{}, v1Err
-		}
 		return providerMedia{}, err
 	}
 	return hongguoAppMediaFromAny(result, videoID)

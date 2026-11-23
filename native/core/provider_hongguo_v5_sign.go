@@ -714,6 +714,30 @@ func hongguoV5Helios(stamp, random uint32) string {
 	return base64.StdEncoding.EncodeToString(out)
 }
 
+// hongguoV5MessageField21 是 Medusa message 段 field 21 的取值，**必须是 312**。
+//
+// 这是 2026-11-22 起全线 200 + 0 字节的唯一根因。field 21 按 sint 编码（zigzag），
+// 312 在 wire 上的原始 protobuf 数值是 624；仓库长期用的 377 会编成 754。
+// 服务端把 754 判为「未知客户端档位」：路由照常命中、业务层直接返回空体，
+// 所以从状态码与响应头上看不出任何异常。
+//
+// 实测（同一身份、同一 vid 7704580213098679358、同一秒内连发两发）：
+//
+//	377 → HTTP 200 /     0 字节  logid 2026112403374506621739302346A2B548
+//	312 → HTTP 200 / 24234 字节  logid 202611240337450C241562455E829712A3
+//	                                （video_height 1280，10 档码率变体）
+//
+// 换成 312 之后 path 用 preload/v1、multi/v1 还是 player/v1 都能出数据，
+// device_level 用 1 或 2 也都能出——真正被判据的只有这一个字段。
+//
+// 来源：N3urda/hongguoTV docs/research/2026-11-23-issue102-nonweb-playback.md
+// 与 kotlin-tv/core/src/main/kotlin/com/hongguotv/core/Signer.kt 的 medusaV5()。
+// **不要再改回 377。**
+//
+// 需要按别的档位生成签名（只用于比对旧参考向量）时，走 hongguoV5MedusaWithTag
+// 显式传入档位，**不要**改动这个常量。
+const hongguoV5MessageField21 = 312
+
 // hongguoV5Medusa 是长签名头：核心信封 + F13 + xmxor + AesV3 三层叠加。
 // 任何一处偏差都只会得到 HTTP 200 + 0 字节，没有可读的报错。
 func hongguoV5Medusa(profile hongguoV5Profile, query string, body []byte, stamp uint32) (string, error) {
@@ -722,12 +746,33 @@ func hongguoV5Medusa(profile hongguoV5Profile, query string, body []byte, stamp 
 
 // hongguoV5MedusaWith 是可注入随机源与会话值的版本：生产走上面的包装，
 // 对照校验时用固定输入逐字节比对（上游参考实现也是这个形状）。
+// 签名档位固定取生产值 hongguoV5MessageField21。
 func hongguoV5MedusaWith(profile hongguoV5Profile, query string, body []byte, stamp uint32,
 	nonce string, started int64, next func() (uint32, error)) (string, error) {
+	return hongguoV5MedusaWithTag(profile, query, body, stamp, hongguoV5MessageField21, nonce, started, next)
+}
+
+// hongguoV5MedusaWithTag 在 hongguoV5MedusaWith 之上再多暴露一个签名档位参数。
+//
+// 存在的唯一理由是**参考向量比对**：golden 值是旧档（field 21 = 377）下的产物，
+// 用它锚定算法本身（SM3 / F13 → xmxor → AesV3 → 信封）有没有漂移，与线上用哪个
+// 档位无关。要改线上档位请改 hongguoV5MessageField21 常量并同步更新
+// TestHongguoV5MessageField21IsCurrent，**不要**从调用方传别的值进生产链路。
+func hongguoV5MedusaWithTag(profile hongguoV5Profile, query string, body []byte, stamp uint32,
+	tag int, nonce string, started int64, next func() (uint32, error)) (string, error) {
 	bodyHash := md5.Sum(body)
 	queryHash := hongguoSM3([]byte(query))
 	f13 := hongguoV5F13(queryHash[:], bodyHash[:], stamp)
 
+	// deviceInfo 是 **14 个 tag** 的精简树，environment 是 **4 个 tag**。
+	//
+	// 社区流出的 miaoxiaohu profile 里另有一套「全量树」（device 约 30 个 tag，
+	// 含 16~21 浮点、23/24/26~29/33/35/36/38；env 约 10 个 tag）。那是**另一个 wire
+	// 变体**，与本仓库从 N3urda/kotlin-tv 对齐的 14+4 不是一回事。
+	//
+	// 本仓库一直用的就是 14+4，端到端实测可出 1080P，**不需要改**。把那套全量 tag
+	// 搬进来会改变签名摘要，等于换了一个请求，只会退回 200 + 0 字节。
+	// 已 A/B 证明的差异只有 message field 21（见 hongguoV5MessageField21）。
 	deviceInfo := hongguoV5Proto(
 		hongguoV5SF(1, 1), hongguoV5SF(2, 2), hongguoV5SF(3, hongguoPlaybackAID),
 		hongguoV5SF(4, profile.DeviceID), hongguoV5SF(5, nonce),
@@ -747,6 +792,15 @@ func hongguoV5MedusaWith(profile hongguoV5Profile, query string, body []byte, st
 	if err != nil {
 		return "", err
 	}
+	// message 的 tag 集合是 v5 专有的，**不要**按旧 medusa 的形状补字段。
+	//
+	// 旧 medusa 有、而 v5 明确**没有**的两个：
+	//   - f(16)：进程随机 nonce。v5 只把它放在 device tag 5，不进 message；
+	//   - f(19)：sm3(query + bodyMd5 + "none")。
+	//
+	// 这两个字段「看着更完整」，但只要补进去，query/body 摘要就变了，服务端立刻
+	// 回到 HTTP 200 + 0 字节。同理 f(2)=5、f(9)=0x040a0300、f(15)=proto(1:1,2:1,3:1,5:1)、
+	// f(20)="none"、f(24) 那段明文 json 都是 v5 指纹，改动等于换一个客户端。
 	message := hongguoV5Proto(
 		hongguoV5SF(1, hongguoV5Magic), hongguoV5SF(2, 5), hongguoV5SF(3, messageRandom),
 		hongguoV5SF(4, hongguoPlaybackAID), hongguoV5SF(5, profile.DeviceID), hongguoV5SF(6, hongguoV5License),
@@ -754,7 +808,7 @@ func hongguoV5MedusaWith(profile hongguoV5Profile, query string, body []byte, st
 		hongguoV5SF(9, int64(hongguoV5SDKVersionCode)), hongguoV5SF(10, flags),
 		hongguoV5SF(12, stamp), hongguoV5SF(13, f13), hongguoV5SF(14, queryHash[:6]),
 		hongguoV5SF(15, counters), hongguoV5SF(17, stamp), hongguoV5SF(20, "none"),
-		hongguoV5SF(21, 377), hongguoV5SF(23, environment),
+		hongguoV5SF(21, tag), hongguoV5SF(23, environment),
 		hongguoV5SF(24, `{"cmr":16777216,"cmr2":16777216,"un_h":11,"vpn":0,"kd":0,"dyn":"","do":1,"tk":true}`),
 	)
 

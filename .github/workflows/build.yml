@@ -266,7 +266,9 @@ jobs:
 
   release:
     needs: [android]
-    if: always() && needs.android.result == 'success'
+    # 提交说明里带 `[skip release]` 时只出 APK artifact、不建 Release。
+    # 用途：真机验证包（先装机确认能播，再发版），避免把没验过的包先挂到线上。
+    if: always() && needs.android.result == 'success' && !contains(github.event.head_commit.message, '[skip release]')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
