@@ -226,21 +226,33 @@ func (downloader *Downloader) hongguoV5Attempt(ctx context.Context, state honggu
 }
 
 func (downloader *Downloader) hongguoV5Once(ctx context.Context, state hongguoIdentityState, videoID string) (providerMedia, error) {
-	// 只走一个形态：29 项 query + player/v1（7.4.3.32）。
+	// 现行路径：完整 36 字段 device 信封 + 74532 / 7.4.5.32 profile（player/v1）。
 	//
-	// 2026-11-22 那次「全线 200 + 0」的真正原因不在请求形态，而在 Medusa 的
-	// message field 21（见 hongguoV5MessageField21）。修好那个字段之后，实测
-	// player/v1、multi/v1、preload/v1 三个 path 全都能出 1080P，所以**不需要**
-	// 多形态轮询；而反过来，13 项 query 那套（hongguoV5V1Request）即使在 field 21
-	// 正确的前提下依然是 200 + 0 字节，是条死路，已从主链路移除。
+	// 2026-11-24 把 medusa message field 21 从 377 改成 312 只顶了一天；11-25 起
+	// 同样请求又全部 HTTP 200 + 0 字节。对照 N3urda/hongguoTV 0.16.15 后确认：
+	// device 信封必须补齐到 36 个 tag（至 tag 38）且 profile 换成 74532；旧的
+	// 14 字段信封 + 74332 profile 即使 field 21 正确也拿不到播放模型。
+	// 2026-11-26 用生产链路实测：player/v1 24595 字节、preload/v1 24404 字节，
+	// 解析出 1080P / cenc 16B / 10 variants，Range 拉流 206 video/mp4。
 	//
-	// 保留单一形态还有一个好处：失败时只消耗一次请求，不会因为「先试坏的形态」
-	// 把站方风控打热。
-	result, err := downloader.hongguoV5PlaybackRequest(ctx, state, videoID)
+	// 空响应冷却（N3urda issue #116）：60 秒内短打 v5 会让上游对整机返回空体，
+	// 所以命中 errHongguoAppEmpty 后直接闸住后续请求；拿到任何有效模型立刻清零。
+	if hongguoV5EmptyCooling() {
+		return providerMedia{}, errHongguoAppEmpty
+	}
+	result, err := downloader.hongguoV5EnvelopePlaybackRequest(ctx, state, videoID)
+	if err != nil {
+		if errors.Is(err, errHongguoAppEmpty) {
+			hongguoV5MarkEmpty()
+		}
+		return providerMedia{}, err
+	}
+	media, err := hongguoAppMediaFromAny(result, videoID)
 	if err != nil {
 		return providerMedia{}, err
 	}
-	return hongguoAppMediaFromAny(result, videoID)
+	hongguoV5ClearEmptyCooldown()
+	return media, nil
 }
 
 // hongguoV5Retryable 判断这次失败值不值得换身份重试。
