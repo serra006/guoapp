@@ -27,7 +27,7 @@ void main() {
     expect(
       store.sources.map((site) => site.id),
       allSourcesEnabled
-          ? ['qimao', 'hongguo', 'hanxiaoquan', 'guipian', 'sorani']
+          ? ['qimao', 'bofeng', 'hongguo', 'hanxiaoquan', 'guipian']
           : ['hongguo'],
     );
     expect(store.allowsSource('huangdou'), isFalse);
@@ -42,20 +42,22 @@ void main() {
     await store.enableSourceGate('666');
     expect(store.sourceGateEnabled, isTrue);
     expect(store.sourcesUnlocked, isTrue);
-    expect(store.sources.length, allSourcesEnabled ? 12 : 1);
+    expect(store.sources.length, allSourcesEnabled ? 5 : 1);
 
     store.lockSources();
     expect(store.sourcesUnlocked, isFalse);
     expect(store.sources.length, allSourcesEnabled ? 5 : 1);
     expect(store.allowsSource('huangdou'), isFalse);
     expect(store.allowsSource('hongguo'), isTrue);
-    if (allSourcesEnabled) expect(store.allowsSource('sorani'), isTrue);
+    // 麒麟与青空已暂时隐藏，不再是 primary；暴风仍是锁定后可见的默认源。
+    if (allSourcesEnabled) expect(store.allowsSource('bofeng'), isTrue);
+    if (allSourcesEnabled) expect(store.allowsSource('sorani'), isFalse);
 
     await expectLater(store.unlockSources('777'), throwsStateError);
     expect(store.sourcesUnlocked, isFalse);
     await store.unlockSources('666');
     expect(store.sourcesUnlocked, isTrue);
-    expect(store.sources.length, allSourcesEnabled ? 12 : 1);
+    expect(store.sources.length, allSourcesEnabled ? 5 : 1);
   });
 
   test('a saved gate hides sources again after restart', () async {
@@ -78,7 +80,7 @@ void main() {
     await store.disableSourceGate();
     expect(store.sourceGateEnabled, isFalse);
     expect(store.sourcesUnlocked, isTrue);
-    expect(store.sources.length, allSourcesEnabled ? 12 : 1);
+    expect(store.sources.length, allSourcesEnabled ? 5 : 1);
   });
 
   test('an invalid pin must be 3 to 12 digits', () async {
@@ -130,7 +132,7 @@ void main() {
     });
     expect(store.sourceGateEnabled, isFalse);
     expect(store.sourcesUnlocked, isTrue);
-    expect(store.sources.length, allSourcesEnabled ? 12 : 1);
+    expect(store.sources.length, allSourcesEnabled ? 5 : 1);
   });
 
   // 密码锁弹窗含动画与异步回调，用固定步进代替 pumpAndSettle，

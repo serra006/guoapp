@@ -47,14 +47,25 @@ class SourceSite {
   static const bofeng = SourceSite('bofeng', '暴风', '短剧 · 分类 · 搜索');
   static const qilin = SourceSite('qilin', '麒麟', '短剧 · 分类 · 搜索');
 
-  /// 默认可见的站源：七猫、暴风、麒麟、红果、韩小圈、鬼片网、青空次元。
+  /// 默认可见的站源：七猫、暴风、红果、韩小圈、鬼片网。
+  ///
+  /// 麒麟与青空因上游故障暂时隐藏，见 [pausedValues]；
+  /// 修复后把二者移回本列表即可恢复显示。
   static const primaryValues = [
     qimao,
     bofeng,
-    qilin,
     hongguo,
     hanxiaoquan,
     guipian,
+  ];
+
+  /// 暂时隐藏的站源：上游故障，待修复后移回 [primaryValues]。
+  ///
+  /// 保留 id 与展示名的原因同 [legacyValues]——旧追剧记录、本地配置档案、
+  /// 局域网同步数据里可能还存着这些 id，`isKnown` 需要认识它们，
+  /// 否则会把旧数据判成非法站源丢弃（见 local_store.dart:912）。
+  static const pausedValues = [
+    qilin,
     sorani,
   ];
 
@@ -73,17 +84,18 @@ class SourceSite {
     SourceSite('huangguoai', '黄果 AI', 'AI 短剧'),
     SourceSite('cloudfront', '黄果旧版', '旧 API 剧库'),
   ];
-  /// 可选站源只剩 7 个 primary，与 README 对外口径「内置 7 个站源」一致。
+  /// 可选站源只剩 5 个 primary，与 README 对外口径「当前可见 5 个站源」一致。
   static const knownValues = [...primaryValues];
-  /// byId / isKnown 仍然认识历史 id，保证旧数据能正常显示、不被判非法。
-  static const allValues = [...primaryValues, ...legacyValues];
+  /// byId / isKnown 仍然认识历史 id 与暂时隐藏的 id，保证旧数据不被判非法。
+  static const allValues = [...primaryValues, ...pausedValues, ...legacyValues];
   static const values = allSourcesEnabled ? knownValues : [hongguo];
   static bool isAvailable(String id) => values.any((site) => site.id == id);
   static bool isKnown(String id) => allValues.any((site) => site.id == id);
   static bool isPrimary(String id) =>
       primaryValues.any((site) => site.id == id);
   static bool isRestricted(String id) =>
-      legacyValues.any((site) => site.id == id);
+      legacyValues.any((site) => site.id == id) ||
+      pausedValues.any((site) => site.id == id);
 
   /// 运行时可见站源：未解锁时只保留 [primaryValues]。
   static List<SourceSite> visibleValues({required bool unlocked}) => [

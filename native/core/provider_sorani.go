@@ -337,6 +337,25 @@ func (d *Downloader) fetchSoraniDetail(ctx context.Context, sourceID string) (Dr
 	return drama, chapters, nil
 }
 
+// soraniPlayError 识别上游播放接口的登录门控。
+// 必须用 ok 形式判断：正常响应的 data 里没有 canPlay 字段，
+// 直接读 row["canPlay"] 会把「字段不存在」误判成「明确 false」。
+// canPlay 只认解包后的 data（row）；提示文案则可能放在 data 内，也可能留在外层信封，
+// 因此先取 row 的 message/msg/reason，取不到再回退 envelope 的 message/msg/msgText。
+func soraniPlayError(row map[string]any, envelope map[string]any) error {
+	if flag, ok := row["canPlay"].(bool); ok && !flag {
+		message := mapString(row, "message", "msg", "reason")
+		if message == "" {
+			message = mapString(envelope, "message", "msg", "msgText")
+		}
+		if message != "" {
+			return fmt.Errorf("青空次元需要登录账号才能播放：%s", message)
+		}
+		return errors.New("青空次元需要登录账号才能播放")
+	}
+	return nil
+}
+
 // resolveSoraniMedia 用章节 ID 里携带的 episodeId 实时换取 m3u8 直链。
 func (d *Downloader) resolveSoraniMedia(ctx context.Context, task Task) (providerMedia, error) {
 	source, sourceID, valid := splitProviderDramaID(task.DramaID)
@@ -357,6 +376,10 @@ func (d *Downloader) resolveSoraniMedia(ctx context.Context, task Task) (provide
 		return providerMedia{}, err
 	}
 	row, _ := soraniPayload(value).(map[string]any)
+	envelope, _ := value.(map[string]any)
+	if err := soraniPlayError(row, envelope); err != nil {
+		return providerMedia{}, err
+	}
 	address := mapString(row, "playUrl", "url")
 	if address == "" {
 		return providerMedia{}, fmt.Errorf("青空次元该分集暂无可用播放地址（线路 %s）", lineCode)

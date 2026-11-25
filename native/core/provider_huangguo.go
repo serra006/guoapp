@@ -374,6 +374,17 @@ func (d *Downloader) fetchHuangguoVideoDetail(ctx context.Context, sourceID stri
 	return drama, uniqueChapters(chapters), nil
 }
 
+// providerTextRequestError 按请求 URL 所属站源生成用户可见的请求失败文案。
+// 旧实现硬编码「黄果来源请求失败」，麒麟域名超时在界面上也会显示成黄果故障，
+// 因此这里根据当前 rawURL 动态取渠道名；识别不出的站源统一用「站源」兜底。
+func providerTextRequestError(rawURL string, tried int, lastErr error) error {
+	name := providerChannelName(providerSourceForURL(rawURL))
+	if name == "" {
+		name = "站源"
+	}
+	return fmt.Errorf("%s请求失败：已尝试 %d 个域名，最后错误：%w", name, tried, lastErr)
+}
+
 func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer string) (string, error) {
 	retries := d.cfg.Retries
 	if retries <= 0 {
@@ -471,7 +482,7 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 		}
 	}
 	if len(candidates) > 1 && lastErr != nil {
-		return "", fmt.Errorf("黄果来源请求失败：已尝试 %d 个域名，最后错误：%w", tried, lastErr)
+		return "", providerTextRequestError(rawURL, tried, lastErr)
 	}
 	return "", lastErr
 }

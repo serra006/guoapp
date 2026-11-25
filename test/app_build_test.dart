@@ -18,7 +18,7 @@ void main() {
     SharedPreferences.setMockInitialValues({'source': 'huangdou'});
     final store = testStore(await SharedPreferences.getInstance());
     expect(appSlug, allSourcesEnabled ? 'zhenguojian' : 'hongguojian');
-    // 默认只显示红果、韩小圈、鬼片网与青空次元，其余站源需要密码解锁。
+    // 默认显示 5 个 primary（七猫/暴风/红果/韩小圈/鬼片），麒麟与青空已暂时隐藏。
     expect(store.sources.length, allSourcesEnabled ? 5 : 1);
     expect(
       SourceSite.values.any((source) => source.id == 'dsd'),
@@ -31,7 +31,7 @@ void main() {
     expect(store.source, 'hongguo');
     await store.enableSourceGate('666666');
     expect(store.sourcesUnlocked, isTrue);
-    expect(store.sources.length, allSourcesEnabled ? 12 : 1);
+    expect(store.sources.length, allSourcesEnabled ? 5 : 1);
     expect(store.allowsSource('dsd'), allSourcesEnabled);
     store.dispose();
   });

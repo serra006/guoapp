@@ -151,7 +151,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(repository.statusRequests, ['hongguo']);
       expect(find.byKey(const ValueKey('source-hongguo')), findsOneWidget);
-      for (final source in SourceSite.knownValues.skip(1)) {
+      // viewer 仅授权红果；其余所有可见源都不应出现（不再假定红果排在首位）。
+      for (final source in SourceSite.knownValues.where((s) => s.id != 'hongguo')) {
         expect(find.byKey(ValueKey('source-${source.id}')), findsNothing);
       }
       await tester.pumpWidget(const SizedBox.shrink());

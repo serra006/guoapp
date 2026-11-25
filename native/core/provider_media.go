@@ -100,6 +100,45 @@ func providerSourceForURL(raw string) string {
 	}
 }
 
+// providerChannelName 把站源 id 映射成界面上展示的中文渠道名。
+// providerSourceForURL 只返回 id（如 qilin / bofeng），错误文案必须再过这一层，
+// 否则会把历史渠道名「黄果」错套到麒麟、暴风等站源的失败提示上。
+// 未知 id 返回空串，由调用方决定通用兜底文案（见 providerTextRequestError）。
+func providerChannelName(source string) string {
+	switch canonicalProviderSource(source) {
+	case sourceHuangguoAI:
+		return "黄果AI"
+	case sourceHuangguoVideo:
+		return "黄果视频"
+	case sourceHuangdou:
+		return "黄豆"
+	case sourceHongguo:
+		return "红果"
+	case sourceHuangju:
+		return "剧果"
+	case sourceYeguo:
+		return "野果"
+	case sourceDSD:
+		return "帝果"
+	case sourceCloudFront:
+		return "黄果旧版"
+	case sourceSorani:
+		return "青空次元"
+	case sourceGuipian:
+		return "鬼片网"
+	case sourceHanxiaoquan:
+		return "韩小圈"
+	case sourceQimao:
+		return "七猫"
+	case sourceBofeng:
+		return bofengChannelName
+	case sourceQilin:
+		return qilinChannelName
+	default:
+		return ""
+	}
+}
+
 func (d *Downloader) providerURLCandidates(raw string) []string {
 	source := providerSourceForURL(raw)
 	if source == "" || source == sourceHuangju || source == sourceYeguo {
